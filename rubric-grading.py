@@ -201,9 +201,13 @@ class Item:
         self.value = value
         self.score = None
         self.comment = ""
+        self.edit_menu = None
     
     def set_comment(self, comment):
         self.comment = comment
+    
+    def get_comment(self):
+        return self.comment
     
     def set_score(self, score):
         self.score = score
@@ -213,6 +217,9 @@ class Item:
     
     def get_value(self):
         return self.value
+    
+    def get_name(self):
+        return self.name
     
     def __str__(self):
         ret = "%-20s%-3d"%(self.name, self.get_value())
@@ -233,10 +240,15 @@ class Item:
     
     def individualize(self, group):
         pass
+    
+    def add_items_to_menu(self, menu):
+        if self.edit_menu is None:
+            self.edit_menu = EditMenu(self)
+        menu.add_item(self.get_name(), self.edit_menu.prompt)
 
 #Class representing a grading category
 class Category(Item):
-    def __init__(self, name, value = None, respect_groups = False):
+    def __init__(self, name, value = None, respect_groups = True):
         super().__init__(name, value)
         self.items = []
         self.respect_groups = respect_groups
@@ -262,6 +274,12 @@ class Category(Item):
                 ret += item.get_score()
         return ret
     
+    def get_name(self):
+        nget = super().get_name()
+        if self.individual is not None:
+            nget += " [%s]"%(self.individual.fname + ' ' + self.individual.lname)
+        return nget
+    
     def is_individual(self):
         return not self.respect_groups
     
@@ -269,6 +287,7 @@ class Category(Item):
         if self.is_individual():
             #Need to alter this
             for student in group:
+                print(student)
                 individual_cat = self.copy()
                 individual_cat.individual = student
                 self.children[student] = individual_cat
@@ -300,17 +319,36 @@ class Category(Item):
         new_cat.score = self.score
         new_cat.comment = self.comment
         new_cat.children = dict()
-        for key in self.children:
-            new_cat.children[key] = self.children[key].copy()
+        #for key in self.children:
+        #    new_cat.children[key] = self.children[key].copy()
         new_cat.individual = self.individual
         for item in self:
             new_cat.add_item(item.copy())
         return new_cat
+    
+    def add_items_to_menu(self, menu):
+        #print("hello")
+        #print(self)
+        if len(self.children) > 0:
+            #print("has children")
+            #print(self.children)
+            for child in self.children.values():
+                child.add_items_to_menu(menu)
+        elif self.has_own_field():
+            #print("entering super")
+            super().add_items_to_menu(menu)
+            #print("leaving super")
+        for item in self:
+            item.add_items_to_menu(menu)
+        #print("Done with ", self)
+        #print()
 
 #Class representing a rubric
 class Rubric:
     #Constructor
     def __init__(self, from_file_or_rubric):
+        #Menu
+        self.menu = None
         if isinstance(from_file_or_rubric, Rubric):
             #We're making a copy
             other = from_file_or_rubric
@@ -418,9 +456,16 @@ class Rubric:
     def is_filled(self):
         return self.total.get_score() is not None
     
+    #Build a menu out of this rubric
+    def get_menu(self):
+        if self.menu is not None:
+            return self.menu
+        self.menu = Menu("Select an item/category:")
+        self.total.add_items_to_menu(self.menu)
+        return self.menu
+    
     def grade(self):
-        #TODO
-        pass
+        return self.get_menu().prompt()
 
 #Class representing a menu item
 class MenuItem:
@@ -480,6 +525,53 @@ class Menu:
     #Add an item to this menu
     def add_item(self, text, callback, *args):
         self.items.append(MenuItem(text, callback, *args))
+
+def assign_grade(item):
+    print("Grading %s, out of %d"%(item.get_name(), item.get_value()))
+    msg = "Please enter grade, or a non-number to cancel: "
+    try:
+        grade = input(msg)
+        if "." in grade:
+            grade = float(grade)
+        else:
+            grade = int(grade)
+        item.set_score(grade)
+    except ValueError:
+        print("Canceled")
+        pass
+
+def assign_comment(item):
+    if item.get_score() is not None:
+        print("Comment for %s, score of %d/%d"%(item.get_name(),\
+            item.get_score(), item.get_value()))
+    else:
+        print("Comment for %s, score TBD"%item.get_name())
+    msg = "Please enter comment, or 0 to cancel: "
+    comment = input(msg)
+    if comment == '0':
+        print("Canceled")
+    else:
+        item.set_comment(comment)
+
+def function_sequencer(funcs, *args):
+    for func in funcs:
+        func(*args)
+
+class EditMenu(Menu):
+    def __init__(self, grade_item):
+        super().__init__("Action on %s:"%grade_item.get_name())
+        grade_str = "Grade"
+        if grade_item.get_score() is not None:
+            grade_str = "Update Grade"
+        self.add_item(grade_str, assign_grade, grade_item)
+        comment_str = "Comment"
+        if grade_item.get_comment() != "":
+            comment_str = "Update Comment"
+        self.add_item(comment_str, assign_comment, grade_item)
+        self.add_item("Both", function_sequencer,\
+            [assign_grade, assign_comment], grade_item)
+
+
 
 if __name__ == '__main__':
     #Should have at least four arguments
