@@ -1,6 +1,7 @@
 import sys
 import re
 import readline
+import collections
 
 #Facilitate grading stuff with a rubric for lots of students
 #Input 1: class list, with email addresses and optional groups
@@ -190,9 +191,24 @@ class Roster:
         if isinstance(entity, Student) and self.using_groups:
             for group in self.graded_entities:
                 if entity in group:
-                    return self.rubrics[group]
+                    return self.rubrics[group].customize(entity)
         else:
             return self.rubrics[entity]
+
+class ItemChangingText:
+    def __init__(self, item):
+        self.item = item
+    
+    def __str__(self):
+        ret = self.item.get_name()
+        if self.item.get_score() is None:
+            ret += " (out of %d)"%(self.item.get_value())
+        else:
+            ret += " (%d/%d)"%(self.item.get_score(), self.item.get_value())
+        if self.item.get_comment() != "":
+            ret += " \"%s\""%self.item.get_comment()
+        return ret
+                
 
 #Class representing a grading item
 class Item:
@@ -222,14 +238,14 @@ class Item:
         return self.name
     
     def __str__(self):
-        ret = "%-20s%-3d"%(self.name, self.get_value())
+        ret = "%-20s%-3d"%(self.get_name(), self.get_value())
         if self.get_score() is not None:
             ret += "%-3d"%self.get_score()
         if self.comment is not None:
             ret += "%s"%self.comment
         return ret
     
-    def copy(self):
+    def copy(self, reference_student = None):
         new_item = Item(self.name, self.value)
         new_item.score = self.score
         new_item.comment = self.comment
@@ -244,7 +260,13 @@ class Item:
     def add_items_to_menu(self, menu):
         if self.edit_menu is None:
             self.edit_menu = EditMenu(self)
-        menu.add_item(self.get_name(), self.edit_menu.prompt)
+        #menu.add_item(self.get_name(), self.edit_menu.prompt)
+        menu.add_item(ItemChangingText(self), self.edit_menu.prompt)
+    
+    #If score is None, make it 100%
+    def fill_scores(self):
+        if self.get_score() is None:
+            self.set_score(self.get_value())
 
 #Class representing a grading category
 class Category(Item):
@@ -264,6 +286,16 @@ class Category(Item):
         return sum([item.get_value() for item in self.items])
     
     def get_score(self):
+        if len(self.children) > 0:
+            max_score = None
+            for child in self.children.values():
+                if child.get_score() is None:
+                    return None
+                elif max_score is None:
+                    max_score = child.get_score()
+                else:
+                    max_score = max(max_score, child.get_score())
+            return max_score
         if len(self.items) == 0:
             return self.score
         ret = 0
@@ -287,7 +319,6 @@ class Category(Item):
         if self.is_individual():
             #Need to alter this
             for student in group:
-                print(student)
                 individual_cat = self.copy()
                 individual_cat.individual = student
                 self.children[student] = individual_cat
@@ -306,24 +337,36 @@ class Category(Item):
         return iter(self.items)
     
     def deep_str(self):
-        ret = str(self)
-        for item in self:
-            if isinstance(item, Category):
-                ret += "\n%s"%item.deep_str()
-            else:
-                ret += "\n%s"%str(item)
+        if len(self.children) > 0:
+            ret = ""
+            for child in self.children.values():
+                ret += child.deep_str()
+        else:
+            ret = str(self)
+            for item in self:
+                if isinstance(item, Category):
+                    ret += "\n%s"%item.deep_str()
+                else:
+                    ret += "\n%s"%str(item)
         return ret + '\n'
     
-    def copy(self):
-        new_cat = Category(self.name, self.value, self.respect_groups)
-        new_cat.score = self.score
-        new_cat.comment = self.comment
+    def copy(self, reference_student = None):
+        #if reference_student is not None:
+        #    print(reference_student)
+        ref = self
+        if reference_student is not None and reference_student in self.children:
+            #Use this one
+            ref = self.children[reference_student]
+        new_cat = Category(ref.name, ref.value, ref.respect_groups)
+        new_cat.score = ref.score
+        new_cat.comment = ref.comment
         new_cat.children = dict()
         #for key in self.children:
         #    new_cat.children[key] = self.children[key].copy()
-        new_cat.individual = self.individual
-        for item in self:
-            new_cat.add_item(item.copy())
+        if reference_student is None:
+            new_cat.individual = ref.individual
+        for item in ref:
+            new_cat.add_item(item.copy(reference_student))
         return new_cat
     
     def add_items_to_menu(self, menu):
@@ -342,18 +385,30 @@ class Category(Item):
             item.add_items_to_menu(menu)
         #print("Done with ", self)
         #print()
+    
+    #Fill in all unfilled scores with 100%
+    def fill_scores(self):
+        if len(self.children) > 0:
+            for child in self.children.values():
+                child.fill_scores()
+        elif self.has_own_field():
+            #print("entering super")
+            super().fill_scores()
+            #print("leaving super")
+        for item in self:
+            item.fill_scores()
 
 #Class representing a rubric
 class Rubric:
     #Constructor
-    def __init__(self, from_file_or_rubric):
+    def __init__(self, from_file_or_rubric, reference_student = None):
         #Menu
         self.menu = None
         if isinstance(from_file_or_rubric, Rubric):
             #We're making a copy
             other = from_file_or_rubric
             self.frontmatter = list(other.frontmatter)
-            self.total = other.total.copy()
+            self.total = other.total.copy(reference_student)
             return
         #It's from a file
         from_file = from_file_or_rubric
@@ -453,6 +508,11 @@ class Rubric:
         if isinstance(graded_entity, FrozenGroup):
             self.total.individualize(graded_entity)
     
+    #Create a copy of this rubric
+    #Then, modify the copy to only use children defined by the given student
+    def customize(self, student):
+        return Rubric(self, student)
+    
     def is_filled(self):
         return self.total.get_score() is not None
     
@@ -462,10 +522,12 @@ class Rubric:
             return self.menu
         self.menu = Menu("Select an item/category:")
         self.total.add_items_to_menu(self.menu)
+        self.menu.add_item("Set rest to 100%", self.total.fill_scores)
         return self.menu
     
     def grade(self):
-        return self.get_menu().prompt()
+        #return self.get_menu().prompt()
+        MenuManager.get_menu_manager().add_menu(self.get_menu())
 
 #Class representing a menu item
 class MenuItem:
@@ -485,12 +547,15 @@ class MenuItem:
 #Class representing a menu that can be
 #accessed via the Command Line
 class Menu:
-    def __init__(self, message, min_item = 0, back = True):
+    def __init__(self, message, min_item = 0, back = True, menued = True):
         self.message = message
         self.items = []
         self.min_item = min_item
         if back:
-            self.add_item("Back", lambda : None)
+            if menued:
+                self.add_item("Back", MenuManager.get_menu_manager().pop)
+            else:
+                self.add_item("Back", lambda : None)
     
     def __str__(self):
         ret = self.message
@@ -511,7 +576,10 @@ class Menu:
         while True:
             ipt = input(">>>> ")
             try:
-                chosen_item = int(ipt)
+                if len(ipt) == 0:
+                    chosen_item = self.min_item
+                else:
+                    chosen_item = int(ipt)
                 if chosen_item < self.min_item:
                     raise ValueError("Value entered too small: %d"%chosen_item)
                 elif chosen_item >= len(self.items) + self.min_item:
@@ -557,22 +625,72 @@ def function_sequencer(funcs, *args):
     for func in funcs:
         func(*args)
 
+class ChangingText:
+    def __init__(self, text1, text2, conditional, *args):
+        self.text1 = text1
+        self.text2 = text2
+        self.conditional = conditional
+        self.args = args
+    
+    def __str__(self):
+        if self.conditional(*self.args):
+            if isinstance(self.text1, collections.Callable):
+                return self.text1(*self.args)
+            else:
+                return self.text1
+        else:
+            if isinstance(self.text2, collections.Callable):
+                return self.text2(*self.args)
+            else:
+                return self.text2
+
 class EditMenu(Menu):
     def __init__(self, grade_item):
-        super().__init__("Action on %s:"%grade_item.get_name())
-        grade_str = "Grade"
-        if grade_item.get_score() is not None:
-            grade_str = "Update Grade"
-        self.add_item(grade_str, assign_grade, grade_item)
-        comment_str = "Comment"
-        if grade_item.get_comment() != "":
-            comment_str = "Update Comment"
-        self.add_item(comment_str, assign_comment, grade_item)
+        super().__init__("Action on %s:"%grade_item.get_name(), menued = False)
+        self.add_item(ChangingText("Grade", lambda item:\
+            "Update Grade (%d/%d)"%(item.get_score(), item.get_value()),\
+            lambda item: item.get_score() is None, grade_item),\
+            assign_grade, grade_item)
+        self.add_item(ChangingText("Comment", lambda item:\
+            "Update Comment (\"%s\")"%item.get_comment(),\
+            lambda item: item.get_comment() == "", grade_item),\
+            assign_comment, grade_item)
+        # grade_str = "Grade"
+        # if grade_item.get_score() is not None:
+        #     grade_str = "Update Grade"
+        # self.add_item(grade_str, assign_grade, grade_item)
+        # comment_str = "Comment"
+        # if grade_item.get_comment() != "":
+        #     comment_str = "Update Comment"
+        # self.add_item(comment_str, assign_comment, grade_item)
         self.add_item("Both", function_sequencer,\
             [assign_grade, assign_comment], grade_item)
 
+class MenuManager:
+    manager = None
+    @staticmethod
+    def get_menu_manager():
+        if MenuManager.manager is None:
+            MenuManager.manager = MenuManager()
+        return MenuManager.manager
+    
+    def __init__(self):
+        self.menu_stack = []
+    
+    def add_menu(self, menu):
+        self.menu_stack.append(menu)
+    
+    def pop(self):
+        return self.menu_stack.pop()
+    
+    def mainloop(self):
+        while len(self.menu_stack) > 0:
+            self.menu_stack[-1].prompt()
 
-
+def print_delay(stuff):
+    print(stuff)
+    input("Press [ENTER] to continue...")
+        
 if __name__ == '__main__':
     #Should have at least four arguments
     #One should be -r
@@ -639,16 +757,19 @@ if __name__ == '__main__':
         print("Blank rubrics initialized")
     
     #Build the menu
+    menu_manager = MenuManager.get_menu_manager()
+    
     main_menu = Menu("What would you like to do?", back = False)
     main_menu.add_item("Quit", sys.exit, 0)
-    main_menu.add_item("Display Roster", print, roster)
-    main_menu.add_item("Display Rubric", print, rubric)
+    main_menu.add_item("Display Roster", print_delay, roster)
+    main_menu.add_item("Display Rubric", print_delay, rubric)
     #Menu for viewing student rubrics
-    student_menu = Menu("Select a student:")
+    student_menu = Menu("Select a student:", menued = False)
     def print_rubric(entity):
-        print(roster.get_rubric(entity))
+        print_delay(roster.get_rubric(entity))
     for student in roster.get_students():
         student_menu.add_item(student, print_rubric, student)
+    #main_menu.add_item("View Rubric by Student", menu_manager.add_menu, student_menu)
     main_menu.add_item("View Rubric by Student", student_menu.prompt)
     #Class used to update menu text when things are graded
     class MenuEntityTextUpdater:
@@ -662,23 +783,24 @@ if __name__ == '__main__':
             return ret
     if roster.is_using_groups():
         #Menu for viewing group rubrics
-        group_menu = Menu("Select a group:")
+        group_menu = Menu("Select a group:", menued = False)
         for group in roster:
             group_menu.add_item(group, print_rubric, group)
+        #main_menu.add_item("View Rubric by Group", menu_manager.add_menu, group_menu)
         main_menu.add_item("View Rubric by Group", group_menu.prompt)
         #Menu for editing rubrics
         grade_menu = Menu("Select a group:")
         for group in roster:
             grade_menu.add_item(MenuEntityTextUpdater(group),\
                 roster.get_rubric(group).grade)
-        main_menu.add_item("Grade a group", grade_menu.prompt)
+        main_menu.add_item("Grade a group", menu_manager.add_menu, grade_menu)
     else:
         #Menu for editing rubrics
         grade_menu = Menu("Select a student:")
         for student in roster:
             grade_menu.add_item(MenuEntityTextUpdater(student),\
                 roster.get_rubric(student).grade)
-        main_menu.add_item("Grade a student", grade_menu.prompt)
+        main_menu.add_item("Grade a student", menu_manager.add_menu, grade_menu)
     
-    while True:
-        main_menu.prompt()
+    menu_manager.add_menu(main_menu)
+    menu_manager.mainloop()
