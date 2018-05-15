@@ -1,4 +1,3 @@
-scores can be floats
 email stuff
 convert to new string formatting
 

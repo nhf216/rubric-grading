@@ -49,6 +49,16 @@ def seeded_input(msg, text):
     finally:
         readline.set_startup_hook()
 
+def is_number(strg):
+    try:
+        int(strg)
+    except:
+        try:
+            float(strg)
+        except:
+            return False
+    return True
+
 #Class representing an entity that can be graded (student or group)
 class GradedEntity:
     def __hash__(self):
@@ -399,10 +409,13 @@ class ItemChangingText:
             if self.item.get_comment() != "":
                 ret += " \"%s\""%self.item.get_comment()
         else:
-            if self.item.get_score() is None:
+            score = self.item.get_score()
+            if score is None:
                 ret += " (out of %d)"%(self.item.get_value())
+            elif isinstance(score, int):
+                ret += " (%d/%d)"%(score, self.item.get_value())
             else:
-                ret += " (%d/%d)"%(self.item.get_score(), self.item.get_value())
+                ret += " (%.2f/%d)"%(score, self.item.get_value())
             if self.item.get_comment() != "":
                 ret += " \"%s\""%self.item.get_comment()
         if self.item.is_changed():
@@ -448,11 +461,15 @@ class Item:
         return self.name
 
     def __str__(self):
-        ret = "%-20s%-3d"%(self.get_name(), self.get_value())
-        if self.get_score() is not None:
-            ret += "%-3d"%self.get_score()
+        ret = "%s\t%d"%(self.get_name(), self.get_value())
+        score = self.get_score()
+        if score is not None:
+            if isinstance(score, int):
+                ret += "\t%d"%score
+            else:
+                ret += "\t%.2f"%score
         if self.comment is not None:
-            ret += "%s"%self.comment
+            ret += "\t%s"%self.comment
         return ret
 
     def copy(self, reference_student = None):
@@ -951,21 +968,30 @@ class Rubric:
     #Convert to a string that can be imported
     def export_rubric(self):
         def transcriber(item):
-            if item.has_own_field() and (item.get_score() is not None or\
-                    item.get_comment() != ''):
+            score = item.get_score()
+            if item.has_own_field() and (score is not None or item.get_comment() != ''):
                 if item.get_individual() is not None:
-                    if item.get_score() is not None:
-                        return "%d%s%s%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
-                            str(item.get_individual()), RUBRIC_SAVE_SEPARATOR,\
-                            item.get_score(), RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                    if score is not None:
+                        if isinstance(score, int):
+                            return "%d%s%s%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                                str(item.get_individual()), RUBRIC_SAVE_SEPARATOR,\
+                                score, RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                        else:
+                            return "%d%s%s%s%.2f%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                                str(item.get_individual()), RUBRIC_SAVE_SEPARATOR,\
+                                score, RUBRIC_SAVE_SEPARATOR, item.get_comment())
                     else:
                         return "%d%s%s%s%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
                             str(item.get_individual()), RUBRIC_SAVE_SEPARATOR,\
                             RUBRIC_SAVE_SEPARATOR, item.get_comment())
                 else:
-                    if item.get_score() is not None:
-                        return "%d%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
-                            item.get_score(), RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                    if score is not None:
+                        if isinstance(score, int):
+                            return "%d%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                                score, RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                        else:
+                            return "%d%s%.2f%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                                score, RUBRIC_SAVE_SEPARATOR, item.get_comment())
                     else:
                         return "%d%s%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
                             RUBRIC_SAVE_SEPARATOR, item.get_comment())
@@ -1007,8 +1033,7 @@ class Rubric:
                 self.frontmatter_dict[line_pieces[0][1:]] = line_pieces[1]
                 continue
             the_id = int(line_pieces[0])
-            if not (len(line_pieces[1]) == 0 or line_pieces[1].isdecimal()\
-                    or (line_pieces[1][0] == '-' and line_pieces[1][1:].isdecimal())):
+            if len(line_pieces[1]) > 0 and not is_number(line_pieces[1]):
                 #We have an individualized thing
                 individual_str = line_pieces[1]
                 del line_pieces[1]
@@ -1017,6 +1042,8 @@ class Rubric:
             the_score = line_pieces[1]
             if the_score == '':
                 the_score = None
+            elif the_score.find('.') >= 0:
+                the_score = float(the_score)
             else:
                 the_score = int(the_score)
             the_comment = RUBRIC_SAVE_SEPARATOR.join(line_pieces[2:])
@@ -1055,10 +1082,13 @@ class Rubric:
     def get_csv(self):
         def traverser(item):
             if isinstance(item, Category):
-                if item.get_score() is None:
+                score = item.get_score()
+                if score is None:
                     return ""
+                elif isinstance(score, int):
+                    return str(score)
                 else:
-                    return str(item.get_score())
+                    return "%.2f"%score
             else:
                 return None
         ret = []
@@ -1084,8 +1114,10 @@ class Rubric:
             score = item.get_score()
             if score is None:
                 score = ""
-            else:
+            elif isinstance(score, int):
                 score = str(score)
+            else:
+                score = "%.2f"%score
             if item == self.total:
                 ret.append("{\\Large \\textbf{%s}}&{\\Large \\textbf{%d}}&{\\Large \\textbf{%s}}&%s\\\\\\hline\n"\
                     %(make_tex_word(item.get_name()), item.get_value(),\
@@ -1199,9 +1231,14 @@ def assign_grade(item):
         pass
 
 def assign_comment(item):
-    if item.get_score() is not None:
-        print("Comment for %s, score of %d/%d"%(item.get_name(),\
-            item.get_score(), item.get_value()))
+    score = item.get_score()
+    if score is not None:
+        if isinstance(score, int):
+            print("Comment for %s, score of %d/%d"%(item.get_name(),\
+                score, item.get_value()))
+        else:
+            print("Comment for %s, score of %.2f/%d"%(item.get_name(),\
+                score, item.get_value()))
     else:
         print("Comment for %s, score TBD"%item.get_name())
     msg = "Please enter comment, or 0 to cancel: "
@@ -1237,9 +1274,14 @@ class ChangingText:
 
 class EditMenu(Menu):
     def __init__(self, grade_item):
+        def score_to_string(score):
+            if isinstance(score, int):
+                return "%d"%score
+            else:
+                return "%.2f"%score
         super().__init__("Action on %s:"%grade_item.get_name(), menued = False)
         self.add_item(ChangingText("Grade", lambda item:\
-            "Update Grade (%d/%d)"%(item.get_score(), item.get_value()),\
+            "Update Grade (%s/%d)"%(score_to_string(item.get_score()), item.get_value()),\
             lambda item: item.get_score() is None, grade_item),\
             assign_grade, grade_item)
         self.add_item(ChangingText("Comment", lambda item:\
