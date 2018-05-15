@@ -3,6 +3,7 @@ import os
 import re
 import readline
 import collections
+import subprocess
 
 #Facilitate grading stuff with a rubric for lots of students
 #Input 1: class list, with email addresses and optional groups
@@ -310,6 +311,7 @@ class Roster:
 
     #Export rubrics into PDFs (via .tex files)
     def export_pdfs(self, pdf_prefix, only_finished = False, all = False, verbose = False):
+        tex_files = []
         for student in self.get_students():
             rubric = self.get_rubric(student)
             if all or rubric.is_filled() or (not only_finished and\
@@ -326,9 +328,9 @@ class Roster:
                         group = self.get_group(student)
                         fd.write("\\textbf{Group %d}\\\\\n"%group.number)
                         fd.write(rubric.get_front_matter_tex())
-                        fd.write("\\textbf{Members: %s}\\\\\n"%', '.join(\
+                        fd.write("\\textbf{Members:} %s\\\\\n"%', '.join(\
                             ['%s %s'%(s.fname, s.lname) for s in group]))
-                        fd.write("\\textbf{Graded Member: %s %s}\\\\\n"%\
+                        fd.write("\\textbf{Graded Member:} %s %s\\\\\n"%\
                             (student.fname, student.lname))
                     else:
                         fd.write("\\textbf{%s %s}\\\\\n"%(student.fname, student.lname))
@@ -342,9 +344,29 @@ class Roster:
                     fd.close()
                     raise
                 fd.close()
+                tex_files.append(fname)
                 if verbose:
                     print("%s written successfully"%fname[fname.rfind(os.sep)+1:])
         print("\nAll .tex files written successfully\n")
+        #Now, compile all of them
+        for tex_file in tex_files:
+            dirc = tex_file[:tex_file.rfind(os.sep)]
+            fname = tex_file[tex_file.rfind(os.sep)+1:-4] + '.pdf'
+            #Remove any old file, if it exists
+            if os.path.isfile(dirc + os.sep + fname):
+                os.remove(dirc + os.sep + fname)
+            args_tex = ['pdflatex', '-output-directory=%s'%dirc, '-halt-on-error', tex_file]
+            if verbose:
+                subprocess.run(args_tex)
+            else:
+                subprocess.run(args_tex, stdout=subprocess.DEVNULL)
+            if not os.path.isfile(dirc + os.sep + fname):
+                raise ValueError("%s failed to compile"%tex_file[tex_file.rfind(os.sep)+1:])
+            if verbose:
+                print("%s compiled successfully"%fname)
+        if verbose:
+            print()
+        print("All .pdf files compiled successfully\n")
 
 
 class ItemChangingText:
