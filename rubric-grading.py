@@ -95,6 +95,24 @@ class Student(GradedEntity):
 def make_tex_name(prefix, student):
     return "%s_%s_%s.tex"%(prefix, student.lname, student.fname)
 
+#Helpers for splittable
+def in_char_range(char, a, b):
+    return ord(char) >= ord(a) and ord(char) <= ord(b)
+
+def is_splittable(char):
+    return not in_char_range(char, 'a', 'z') and\
+        not in_char_range(char, 'A', 'Z') and\
+        not in_char_range(char, '0', '9') and char != '_' and char != ' '
+
+#Make a word splittable in LaTeX
+def make_tex_word(strg):
+    ret = []
+    for letter in strg:
+        ret.append(letter)
+        if is_splittable(letter):
+            ret.append('{\\allowbreak}')
+    return ''.join(ret)
+
 #Class representing all the graded entities in the class
 class Roster:
     #Constructor
@@ -301,7 +319,9 @@ class Roster:
                 fd = open(fname, 'w')
                 try:
                     fd.write("\\documentclass[%dpt]{article}\n"%TEX_FONT_SIZE)
-                    fd.write("\\begin{document}\n")
+                    fd.write("\\usepackage{fullpage}\n")
+                    fd.write("\\usepackage[none]{hyphenat}\n")
+                    fd.write("\\begin{document}\n\\noindent ")
                     if self.is_using_groups():
                         group = self.get_group(student)
                         fd.write("\\textbf{Group %d}\\\\\n"%group.number)
@@ -313,7 +333,7 @@ class Roster:
                     else:
                         fd.write("\\textbf{%s %s}\\\\\n"%(student.fname, student.lname))
                         fd.write(rubric.get_front_matter_tex())
-                    fd.write("\\begin{tabular}{|l|l|l|p{3.5in}|}\\hline\n")
+                    fd.write("\n\\noindent\\begin{tabular}{|p{1.7in}|l|l|p{2.8in}|}\\hline\n")
                     fd.write("&\\textbf{TOTAL}&\\textbf{POINTS}&\\textbf{COMMENTS}\\\\\\hline\n")
                     fd.write(rubric.get_tex())
                     fd.write("\\end{tabular}\n")
@@ -947,7 +967,7 @@ class Rubric:
         for fm in self.frontmatter:
             fm_val = self.frontmatter_dict[fm]
             if fm_val is not None:
-                ret += "\\textbf{%s: %s}\\\\\n"%(fm, fm_val)
+                ret += "\\textbf{%s:} %s\\\\\n"%(fm, fm_val)
         return ret
 
     #Get LaTeX for grade table
@@ -960,21 +980,26 @@ class Rubric:
             else:
                 score = str(score)
             if item == self.total:
-                return "{\\Large \\textbf{%s}}&{\\Large \\textbf{%d}}&{\\Large \\textbf{%s}}&%s\\\\\\hline\n"\
-                    %(item.get_name(), item.get_value(), score, item.get_comment())
+                ret.append("{\\Large \\textbf{%s}}&{\\Large \\textbf{%d}}&{\\Large \\textbf{%s}}&%s\\\\\\hline\n"\
+                    %(make_tex_word(item.get_name()), item.get_value(),\
+                    score, make_tex_word(item.get_comment())))
+                return
             elif isinstance(item, Category):
                 str1 = "\\textbf{"
                 str2 = "}"
+                ret.append("&&&\\\\\\hline\n")
             else:
                 str1 = ""
                 str2 = ""
             ret.append("\\textbf{%s}&%s%d%s&%s%s%s&%s\\\\\\hline\n"%\
-                (item.get_name(), str1, item.get_value(), str2, str1, score,\
-                str2, item.get_comment()))
+                (make_tex_word(item.get_name()), str1, item.get_value(), str2, str1, score,\
+                str2, make_tex_word(item.get_comment())))
         self.total.traverse(traverser, ignore_blanks = False)
+        ret.append("&&&\\\\\\hline\n")
         itm = ret[0]
         del ret[0]
         ret.append(itm)
+        del ret[0]
         return '\n'.join(ret) + '\n'
 
 #Class representing a menu item
