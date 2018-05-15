@@ -39,6 +39,8 @@ ROSTER_SAVE_SYMBOL = '?'
 RUBRIC_SAVE_SEPARATOR = ':'
 RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '&'
 
+TEX_FONT_SIZE = 12
+
 #Class representing an entity that can be graded (student or group)
 class GradedEntity:
     def __hash__(self):
@@ -208,6 +210,24 @@ class Roster:
         else:
             return self.rubrics[entity]
 
+    def get_group(self, student):
+        for group in self.graded_entities:
+            if student in group:
+                return group
+
+    #Get a student from the roster
+    #If necessary, make it one whose grading is in progress or done
+    #If can't do that, just return first student
+    def get_a_student(self, only_finished = False, all = False):
+        def rubric_is_ok(rubric):
+            return all or rubric.is_filled() or (not only_finished and\
+                rubric.is_in_progress())
+        for student in self.get_students():
+            rubric = self.get_rubric(student)
+            if rubric_is_ok(rubric):
+                return student
+        return self.get_students()[0]
+
     #Save all the rubrics
     def save(self, file):
         fd = open(file, 'w')
@@ -219,7 +239,7 @@ class Roster:
             fd.close()
             raise
         fd.close()
-        print("Successfully saved in %s\n"%file[file.find(os.sep)+1:])
+        print("Successfully saved in %s\n"%file[file.rfind(os.sep)+1:])
 
     #Load all the rubrics
     def load(self, file):
@@ -249,7 +269,7 @@ class Roster:
             fd.close()
             raise
         fd.close()
-        print("%s loaded successfully\n"%file[file.find(os.sep)+1:])
+        print("%s loaded successfully\n"%file[file.rfind(os.sep)+1:])
 
     #Export grades into a CSV file
     def export_csv(self, csv_filename):
@@ -268,13 +288,43 @@ class Roster:
             fd.close()
             raise
         fd.close()
-        print("CSV %s written successfully\n"%csv_filename[csv_filename.find(os.sep)+1:])
+        print("CSV %s written successfully\n"%csv_filename[csv_filename.rfind(os.sep)+1:])
 
     #Export rubrics into PDFs (via .tex files)
     def export_pdfs(self, pdf_prefix, only_finished = False, all = False, verbose = False):
         for student in self.get_students():
             rubric = self.get_rubric(student)
-            #TODO
+            if all or rubric.is_filled() or (not only_finished and\
+                    rubric.is_in_progress()):
+                #Include this one
+                fname = make_tex_name(pdf_prefix, student)
+                fd = open(fname, 'w')
+                try:
+                    fd.write("\\documentclass[%dpt]{article}\n"%TEX_FONT_SIZE)
+                    fd.write("\\begin{document}\n")
+                    if self.is_using_groups():
+                        group = self.get_group(student)
+                        fd.write("\\textbf{Group %d}\\\\\n"%group.number)
+                        fd.write(rubric.get_front_matter_tex())
+                        fd.write("\\textbf{Members: %s}\\\\\n"%', '.join(\
+                            ['%s %s'%(s.fname, s.lname) for s in group]))
+                        fd.write("\\textbf{Graded Member: %s %s}\\\\\n"%\
+                            (student.fname, student.lname))
+                    else:
+                        fd.write("\\textbf{%s %s}\\\\\n"%(student.fname, student.lname))
+                        fd.write(rubric.get_front_matter_tex())
+                    fd.write("\\begin{tabular}{|l|l|l|p{3.5in}|}\\hline\n")
+                    fd.write("&\\textbf{TOTAL}&\\textbf{POINTS}&\\textbf{COMMENTS}\\\\\\hline\n")
+                    fd.write(rubric.get_tex())
+                    fd.write("\\end{tabular}\n")
+                    fd.write("\\end{document}")
+                except:
+                    fd.close()
+                    raise
+                fd.close()
+                if verbose:
+                    print("%s written successfully"%fname[fname.rfind(os.sep)+1:])
+        print("\nAll .tex files written successfully\n")
 
 
 class ItemChangingText:
@@ -283,12 +333,16 @@ class ItemChangingText:
 
     def __str__(self):
         ret = self.item.get_name()
-        if self.item.get_score() is None:
-            ret += " (out of %d)"%(self.item.get_value())
+        if not self.item.has_own_field():
+            if self.item.get_comment() != "":
+                ret += " \"%s\""%self.item.get_comment()
         else:
-            ret += " (%d/%d)"%(self.item.get_score(), self.item.get_value())
-        if self.item.get_comment() != "":
-            ret += " \"%s\""%self.item.get_comment()
+            if self.item.get_score() is None:
+                ret += " (out of %d)"%(self.item.get_value())
+            else:
+                ret += " (%d/%d)"%(self.item.get_score(), self.item.get_value())
+            if self.item.get_comment() != "":
+                ret += " \"%s\""%self.item.get_comment()
         return ret
 
 
@@ -539,22 +593,15 @@ class FrontmatterChangingText:
             return fm
         else:
             return "%s (\"%s\")"%(fm, fm_dict[fm])
-        ret = self.item.get_name()
-        if self.item.get_score() is None:
-            ret += " (out of %d)"%(self.item.get_value())
-        else:
-            ret += " (%d/%d)"%(self.item.get_score(), self.item.get_value())
-        if self.item.get_comment() != "":
-            ret += " \"%s\""%self.item.get_comment()
-        return ret
 
 #Class representing a rubric
 class Rubric:
     #Constructor
     def __init__(self, from_file_or_rubric, reference_student = None):
-        #Menu
+        #Menus
         self.menu = None
         self.frontmatter_menu = None
+        self.auto_comment_menu = None
         if isinstance(from_file_or_rubric, Rubric):
             #We're making a copy
             other = from_file_or_rubric
@@ -567,7 +614,6 @@ class Rubric:
         #Things that need to be manually entered (e.g. a title)
         self.frontmatter = []
         self.frontmatter_dict = dict()
-        self.frontmatter_menu = None
         #List of categories
         self.total = Category("TOTAL")
         #Keep track of current category
@@ -696,7 +742,17 @@ class Rubric:
         def accumulator(add_bool):
             nonlocal ret
             ret = ret or add_bool
-        self.total.traverse(checker, accumulator)
+        self.total.traverse(checker, accumulator, ignore_blanks = False)
+        return ret
+
+    def is_auto_comment_in_progress(self):
+        def checker(item):
+            return not item.has_own_field() and item.get_comment() != ''
+        ret = False
+        def accumulator(add_bool):
+            nonlocal ret
+            ret = ret or add_bool
+        self.total.traverse(checker, accumulator, ignore_blanks = False)
         return ret
 
     #Set front matter for this rubric
@@ -714,6 +770,23 @@ class Rubric:
             for fm in self.frontmatter:
                 self.frontmatter_menu.add_item(FrontmatterChangingText(fm,\
                     self.frontmatter_dict), modify_front_matter, fm)
+
+    #Add a comment to a category with no field for itself
+    def add_auto_comment(self):
+        if self.auto_comment_menu is None:
+            self.auto_comment_menu = Menu("Select category to add comment to:", menued = False)
+            def auto_comment(item):
+                comment = input("Enter comment for %s, or 0 to cancel: "%item.get_name())
+                if comment == '0':
+                    return
+                item.set_comment(comment)
+            def traverser(item):
+                if not item.has_own_field():
+                    return self.auto_comment_menu.add_item(ItemChangingText(item),\
+                        auto_comment, item)
+            self.total.traverse(traverser, ignore_blanks = False)
+        self.auto_comment_menu.prompt()
+
 
     #Build a menu out of this rubric
     def get_menu(self):
@@ -740,6 +813,9 @@ class Rubric:
             self.menu.add_item(ChangingText(fm_update_text, fm_set,\
                 self.some_front_matter), self.set_front_matter)
         self.total.add_items_to_menu(self.menu)
+        self.menu.add_item(ChangingText("Add comment to auto-scored category (in progress)",\
+            "Add comment to auto-scored category", self.is_auto_comment_in_progress),\
+            self.add_auto_comment)
         self.menu.add_item("Set rest to 100%", self.total.fill_scores)
         return self.menu
 
@@ -768,6 +844,14 @@ class Rubric:
                     else:
                         return "%d%s%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
                             RUBRIC_SAVE_SEPARATOR, item.get_comment())
+            elif not item.has_own_field() and item.get_comment() != '':
+                if item.get_individual() is not None:
+                    return "%d%s%s%s%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                        str(item.get_individual()), RUBRIC_SAVE_SEPARATOR,\
+                        RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                else:
+                    return "%d%s%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                        RUBRIC_SAVE_SEPARATOR, item.get_comment())
             else:
                 return ""
         ret = ""
@@ -780,7 +864,7 @@ class Rubric:
         def accumulator(add_str):
             nonlocal ret
             ret += add_str
-        self.total.traverse(transcriber, accumulator)
+        self.total.traverse(transcriber, accumulator, ignore_blanks = False)
         return ret
 
     #Import a string created by export
@@ -820,10 +904,11 @@ class Rubric:
                 key = (item.get_id(), str(item.get_individual()))
             if key in insertions:
                 #Insert it!
-                item.set_score(insertions[key][0])
+                if item.has_own_field():
+                    item.set_score(insertions[key][0])
                 item.set_comment(insertions[key][1])
                 del insertions[key]
-        self.total.traverse(importer)
+        self.total.traverse(importer, ignore_blanks = False)
 
     #Get comma-separated list of categories
     def get_category_csv(self):
@@ -856,6 +941,41 @@ class Rubric:
         self.total.traverse(traverser, accumulator, ignore_blanks = False)
         return ','.join(ret)
 
+    #Get LaTeX for front matter
+    def get_front_matter_tex(self):
+        ret = ''
+        for fm in self.frontmatter:
+            fm_val = self.frontmatter_dict[fm]
+            if fm_val is not None:
+                ret += "\\textbf{%s: %s}\\\\\n"%(fm, fm_val)
+        return ret
+
+    #Get LaTeX for grade table
+    def get_tex(self):
+        ret = []
+        def traverser(item):
+            score = item.get_score()
+            if score is None:
+                score = ""
+            else:
+                score = str(score)
+            if item == self.total:
+                return "{\\Large \\textbf{%s}}&{\\Large \\textbf{%d}}&{\\Large \\textbf{%s}}&%s\\\\\\hline\n"\
+                    %(item.get_name(), item.get_value(), score, item.get_comment())
+            elif isinstance(item, Category):
+                str1 = "\\textbf{"
+                str2 = "}"
+            else:
+                str1 = ""
+                str2 = ""
+            ret.append("\\textbf{%s}&%s%d%s&%s%s%s&%s\\\\\\hline\n"%\
+                (item.get_name(), str1, item.get_value(), str2, str1, score,\
+                str2, item.get_comment()))
+        self.total.traverse(traverser, ignore_blanks = False)
+        itm = ret[0]
+        del ret[0]
+        ret.append(itm)
+        return '\n'.join(ret) + '\n'
 
 #Class representing a menu item
 class MenuItem:
@@ -1082,11 +1202,11 @@ class FileManager:
         return self.get_cond_file("File to export into: ", FileManager.CSV_KEY,\
             save_as = save_as)
 
-    def get_pdf_prefix(self, student):
+    def get_pdf_prefix(self, student, save_as = False):
         return self.get_cond_file("PDF prefix to use: ", FileManager.PDF_KEY,\
             exister = lambda a, s: a + make_tex_name(s, student),\
-            confirmer = "Warning: Prefix %s already in use. Overwrite?",\
-            returner = lambda a, s: s, save_as = save_as)
+            confirmer = "Warning: Prefix %s already in use. Overwrite?")
+            #, returner = lambda a, s: s, save_as = save_as)
 
 def print_delay(stuff):
     print(stuff)
@@ -1244,7 +1364,9 @@ if __name__ == '__main__':
     pdf_flag_list = ["Completed", "In Progress", "All"]
     pdf_save_as = False
     def export_pdf(flag):
-        fil = file_manager.get_pdf_prefix(pdf_save_as)
+        fil = file_manager.get_pdf_prefix(roster.get_a_student(only_finished =\
+            flag == pdf_flag_list[0], all = flag == pdf_flag_list[-1]),\
+            pdf_save_as)
         if fil is not None:
             roster.export_pdfs(fil, only_finished = flag == pdf_flag_list[0],\
                 all = flag == pdf_flag_list[-1], verbose = verbose)
