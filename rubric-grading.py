@@ -17,6 +17,7 @@ import collections
 #Compiles .tex files into pdf
 #Export grades to .csv, alphabetized
 #Ability to change name of "TOTAL"
+#Import comments from other students
 #Interface for subject line of email
 #Interface for body of email
 #Interface for exceptional body of email
@@ -32,6 +33,9 @@ RUBRIC_COMMENT = '#'
 RUBRIC_FRONT_MATTER = '&'
 RUBRIC_CATEGORY = '!'
 RUBRIC_POINT_SEP = '~'
+
+ROSTER_SAVE_SYMBOL = '?'
+RUBRIC_SAVE_SEPARATOR = ':'
 
 #Class representing an entity that can be graded (student or group)
 class GradedEntity:
@@ -94,6 +98,8 @@ class Roster:
         self.using_groups = None
         #Rubrics
         self.rubrics = dict()
+        #File for saving
+        self.file = None
         #Open the file
         fd = open(from_file, 'r')
         line_counter = 0
@@ -194,6 +200,50 @@ class Roster:
                     return self.rubrics[group].customize(entity)
         else:
             return self.rubrics[entity]
+    
+    #Save all the rubrics
+    def save(self, file):
+        fd = open(file, 'w')
+        try:
+            for entity in self.graded_entities:
+                fd.write("%s%s\n"%str(ROSTER_SAVE_SYMBOL, entity))
+                fd.write("%s\n"%self.graded_entities[entity].export_rubric())
+        except:
+            fd.close()
+            raise
+        fd.close()
+        print("Successfully saved in %s"%file)
+    
+    #Load all the rubrics
+    def load(self, file):
+        fd = open(file, 'r')
+        cur_entity = None
+        buffer = ""
+        def flush_buffer():
+            nonlocal buffer
+            if buffer != "":
+                self.graded_entities[cur_entity].import_rubric(buffer)
+                buffer = ""
+        try:
+            for line in fd:
+                line = line.strip()
+                if len(line) == 0:
+                    continue
+                elif line[0] == ROSTER_SAVE_SYMBOL:
+                    for entity in self.graded_entities:
+                        if str(entity) == line[1:]:
+                            flush_buffer()
+                            cur_entity = entity
+                            break
+                else:
+                    buffer += "%s\n"%line
+            flush_buffer()
+        except:
+            fd.close()
+            raise
+        fd.close()
+        print("%s loaded successfully"%file)
+            
 
 class ItemChangingText:
     def __init__(self, item):
@@ -212,12 +262,15 @@ class ItemChangingText:
 
 #Class representing a grading item
 class Item:
+    next_id = 0
     def __init__(self, name, value):
         self.name = name
         self.value = value
         self.score = None
         self.comment = ""
         self.edit_menu = None
+        self.id = Item.next_id
+        Item.next_id += 1
     
     def set_comment(self, comment):
         self.comment = comment
@@ -249,6 +302,7 @@ class Item:
         new_item = Item(self.name, self.value)
         new_item.score = self.score
         new_item.comment = self.comment
+        new_item.id = self.id
         return new_item
     
     def is_individual(self):
@@ -257,16 +311,31 @@ class Item:
     def individualize(self, group):
         pass
     
-    def add_items_to_menu(self, menu):
-        if self.edit_menu is None:
-            self.edit_menu = EditMenu(self)
-        #menu.add_item(self.get_name(), self.edit_menu.prompt)
-        menu.add_item(ItemChangingText(self), self.edit_menu.prompt)
+    def get_individual(self):
+        return None
     
-    #If score is None, make it 100%
-    def fill_scores(self):
-        if self.get_score() is None:
-            self.set_score(self.get_value())
+    def get_id(self):
+        return self.id
+    
+    def has_own_field(self):
+        return True
+    
+    # def add_items_to_menu(self, menu):
+    #     if self.edit_menu is None:
+    #         self.edit_menu = EditMenu(self)
+    #     #menu.add_item(self.get_name(), self.edit_menu.prompt)
+    #     menu.add_item(ItemChangingText(self), self.edit_menu.prompt)
+    
+    # #If score is None, make it 100%
+    # def fill_scores(self):
+    #     if self.get_score() is None:
+    #         self.set_score(self.get_value())
+    
+    def traverse(self, action, accum):
+        if accum is None:
+            action(self)
+        else:
+            accum(action(self))
 
 #Class representing a grading category
 class Category(Item):
@@ -315,6 +384,9 @@ class Category(Item):
     def is_individual(self):
         return not self.respect_groups
     
+    def get_individual(self):
+        return self.individual
+    
     def individualize(self, group):
         if self.is_individual():
             #Need to alter this
@@ -336,6 +408,19 @@ class Category(Item):
     def __iter__(self):
         return iter(self.items)
     
+    #Template for traversing all things that have values
+    #and doing something with them
+    def traverse(self, action, accum=None):
+        if len(self.children) > 0:
+            for child in self.children.values():
+                child.traverse(action, accum)
+        elif self.has_own_field():
+            #print("entering super")
+            super().traverse(action, accum)
+            #print("leaving super")
+        for item in self:
+            item.traverse(action, accum)
+    
     def deep_str(self):
         if len(self.children) > 0:
             ret = ""
@@ -348,7 +433,7 @@ class Category(Item):
                     ret += "\n%s"%item.deep_str()
                 else:
                     ret += "\n%s"%str(item)
-        return ret + '\n'
+        return ret
     
     def copy(self, reference_student = None):
         #if reference_student is not None:
@@ -361,6 +446,7 @@ class Category(Item):
         new_cat.score = ref.score
         new_cat.comment = ref.comment
         new_cat.children = dict()
+        new_cat.id = ref.id
         #for key in self.children:
         #    new_cat.children[key] = self.children[key].copy()
         if reference_student is None:
@@ -369,34 +455,47 @@ class Category(Item):
             new_cat.add_item(item.copy(reference_student))
         return new_cat
     
+    # def add_items_to_menu(self, menu):
+    #     #print("hello")
+    #     #print(self)
+    #     if len(self.children) > 0:
+    #         #print("has children")
+    #         #print(self.children)
+    #         for child in self.children.values():
+    #             child.add_items_to_menu(menu)
+    #     elif self.has_own_field():
+    #         #print("entering super")
+    #         super().add_items_to_menu(menu)
+    #         #print("leaving super")
+    #     for item in self:
+    #         item.add_items_to_menu(menu)
+    #     #print("Done with ", self)
+    #     #print()
     def add_items_to_menu(self, menu):
-        #print("hello")
-        #print(self)
-        if len(self.children) > 0:
-            #print("has children")
-            #print(self.children)
-            for child in self.children.values():
-                child.add_items_to_menu(menu)
-        elif self.has_own_field():
-            #print("entering super")
-            super().add_items_to_menu(menu)
-            #print("leaving super")
-        for item in self:
-            item.add_items_to_menu(menu)
-        #print("Done with ", self)
-        #print()
+        def add_items_to_menu_action(item):
+            if item.edit_menu is None:
+                item.edit_menu = EditMenu(item)
+            #menu.add_item(self.get_name(), self.edit_menu.prompt)
+            menu.add_item(ItemChangingText(item), item.edit_menu.prompt)
+        self.traverse(add_items_to_menu_action)
     
+    # #Fill in all unfilled scores with 100%
+    # def fill_scores(self):
+    #     if len(self.children) > 0:
+    #         for child in self.children.values():
+    #             child.fill_scores()
+    #     elif self.has_own_field():
+    #         #print("entering super")
+    #         super().fill_scores()
+    #         #print("leaving super")
+    #     for item in self:
+    #         item.fill_scores()
     #Fill in all unfilled scores with 100%
     def fill_scores(self):
-        if len(self.children) > 0:
-            for child in self.children.values():
-                child.fill_scores()
-        elif self.has_own_field():
-            #print("entering super")
-            super().fill_scores()
-            #print("leaving super")
-        for item in self:
-            item.fill_scores()
+        def fill_scores_action(item):
+            if item.get_score() is None:
+                item.set_score(item.get_value())
+        self.traverse(fill_scores_action)
 
 #Class representing a rubric
 class Rubric:
@@ -528,6 +627,58 @@ class Rubric:
     def grade(self):
         #return self.get_menu().prompt()
         MenuManager.get_menu_manager().add_menu(self.get_menu())
+    
+    #Convert to a string that can be imported
+    def export_rubric(self):
+        def transcriber(item):
+            if item.has_own_field():
+                if item.get_individual() is not None:
+                    return "%d%s%s%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                        str(item.get_individual()), RUBRIC_SAVE_SEPARATOR,\
+                        item.get_score(), RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                else:
+                    return "%d%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                    item.get_score(), RUBRIC_SAVE_SEPARATOR, item.get_comment())
+            else:
+                return ""
+        ret = ""
+        def accumulator(add_str):
+            nonlocal ret
+            ret += add_str
+        self.total.traverse(transcriber, accumulator)
+        return ret
+    
+    #Import a string created by export
+    def import_rubric(self, rubric_repr):
+        #Read in the things that need to be imported
+        lines = rubric_repr.split('\n')
+        insertions = dict()
+        for line in lines:
+            line_pieces = line.split(RUBRIC_SAVE_SEPARATOR)
+            the_id = int(line_pieces[0])
+            if not line_pieces[1].isdecimal():
+                #We have an individualized thing
+                individual_str = line_pieces[1]
+                del line_pieces[1]
+            else:
+                individual_str = None
+            the_score = line_pieces[1]
+            the_comment = RUBRIC_SAVE_SEPARATOR.join(line_pieces[2:])
+            insertions[(the_id, individual_str)] = (the_score, the_comment)
+        #Actually do the importing
+        def importer(item):
+            nonlocal insertions
+            if item.get_individual() is None:
+                key = (item.get_id(), None)
+            else:
+                key = (item.get_id(), str(item.get_individual()))
+            if key in insertions:
+                #Insert it!
+                self.set_score(insertions[key][0])
+                self.set_comment(insertions[key][1])
+                del insertions[key]
+        self.total.traverse(importer)
+
 
 #Class representing a menu item
 class MenuItem:
@@ -596,14 +747,17 @@ class Menu:
 
 def assign_grade(item):
     print("Grading %s, out of %d"%(item.get_name(), item.get_value()))
-    msg = "Please enter grade, or a non-number to cancel: "
+    msg = "Please enter grade, blank to clear, or a non-number to cancel: "
     try:
         grade = input(msg)
-        if "." in grade:
-            grade = float(grade)
+        if len(grade) == 0:
+            item.set_score(None)
         else:
-            grade = int(grade)
-        item.set_score(grade)
+            if "." in grade:
+                grade = float(grade)
+            else:
+                grade = int(grade)
+            item.set_score(grade)
     except ValueError:
         print("Canceled")
         pass
@@ -686,6 +840,9 @@ class MenuManager:
     def mainloop(self):
         while len(self.menu_stack) > 0:
             self.menu_stack[-1].prompt()
+
+class FileManager:
+    pass #TODO
 
 def print_delay(stuff):
     print(stuff)
