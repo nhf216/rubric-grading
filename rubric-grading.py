@@ -1,4 +1,5 @@
 import sys
+import os
 import re
 import readline
 import collections
@@ -63,7 +64,8 @@ class FrozenGroup(GradedEntity):
         self.students = frozenset(group.students)
     
     def __str__(self):
-        return "Group %d (%s)"%(self.number, ', '.join([str(s) for s in self.students]))
+        #return "Group %d (%s)"%(self.number, ', '.join([str(s) for s in self.students]))
+        return "Group %d (%s)"%(self.number, ', '.join([str(st) for st in sorted(self.students, key = lambda s: s.lname + ' ' + s.fname)]))
     
     def __iter__(self):
         return iter(self.students)
@@ -206,13 +208,13 @@ class Roster:
         fd = open(file, 'w')
         try:
             for entity in self.graded_entities:
-                fd.write("%s%s\n"%str(ROSTER_SAVE_SYMBOL, entity))
-                fd.write("%s\n"%self.graded_entities[entity].export_rubric())
+                fd.write("%s%s\n"%(ROSTER_SAVE_SYMBOL, str(entity)))
+                fd.write("%s\n"%self.rubrics[entity].export_rubric())
         except:
             fd.close()
             raise
         fd.close()
-        print("Successfully saved in %s"%file)
+        print("Successfully saved in %s\n"%file)
     
     #Load all the rubrics
     def load(self, file):
@@ -222,7 +224,7 @@ class Roster:
         def flush_buffer():
             nonlocal buffer
             if buffer != "":
-                self.graded_entities[cur_entity].import_rubric(buffer)
+                self.rubrics[cur_entity].import_rubric(buffer)
                 buffer = ""
         try:
             for line in fd:
@@ -242,7 +244,7 @@ class Roster:
             fd.close()
             raise
         fd.close()
-        print("%s loaded successfully"%file)
+        print("%s loaded successfully\n"%file)
             
 
 class ItemChangingText:
@@ -423,7 +425,7 @@ class Category(Item):
     
     def deep_str(self):
         if len(self.children) > 0:
-            ret = ""
+            ret = "\n"
             for child in self.children.values():
                 ret += child.deep_str()
         else:
@@ -631,14 +633,24 @@ class Rubric:
     #Convert to a string that can be imported
     def export_rubric(self):
         def transcriber(item):
-            if item.has_own_field():
+            if item.has_own_field() and (item.get_score() is not None or\
+                    item.get_comment() != ''):
                 if item.get_individual() is not None:
-                    return "%d%s%s%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
-                        str(item.get_individual()), RUBRIC_SAVE_SEPARATOR,\
-                        item.get_score(), RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                    if item.get_score() is not None:
+                        return "%d%s%s%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                            str(item.get_individual()), RUBRIC_SAVE_SEPARATOR,\
+                            item.get_score(), RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                    else:
+                        return "%d%s%s%s%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                            str(item.get_individual()), RUBRIC_SAVE_SEPARATOR,\
+                            RUBRIC_SAVE_SEPARATOR, item.get_comment())
                 else:
-                    return "%d%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
-                    item.get_score(), RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                    if item.get_score() is not None:
+                        return "%d%s%d%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                            item.get_score(), RUBRIC_SAVE_SEPARATOR, item.get_comment())
+                    else:
+                        return "%d%s%s%s\n"%(item.get_id(), RUBRIC_SAVE_SEPARATOR,\
+                            RUBRIC_SAVE_SEPARATOR, item.get_comment())
             else:
                 return ""
         ret = ""
@@ -654,15 +666,22 @@ class Rubric:
         lines = rubric_repr.split('\n')
         insertions = dict()
         for line in lines:
+            if line.strip() == '':
+                continue
             line_pieces = line.split(RUBRIC_SAVE_SEPARATOR)
             the_id = int(line_pieces[0])
-            if not line_pieces[1].isdecimal():
+            if not (len(line_pieces[1]) == 0 or line_pieces[1].isdecimal()\
+                    or (line_pieces[1][0] == '-' and line_pieces[1][1:].isdecimal())):
                 #We have an individualized thing
                 individual_str = line_pieces[1]
                 del line_pieces[1]
             else:
                 individual_str = None
             the_score = line_pieces[1]
+            if the_score == '':
+                the_score = None
+            else:
+                the_score = int(the_score)
             the_comment = RUBRIC_SAVE_SEPARATOR.join(line_pieces[2:])
             insertions[(the_id, individual_str)] = (the_score, the_comment)
         #Actually do the importing
@@ -674,8 +693,8 @@ class Rubric:
                 key = (item.get_id(), str(item.get_individual()))
             if key in insertions:
                 #Insert it!
-                self.set_score(insertions[key][0])
-                self.set_comment(insertions[key][1])
+                item.set_score(insertions[key][0])
+                item.set_comment(insertions[key][1])
                 del insertions[key]
         self.total.traverse(importer)
 
@@ -736,10 +755,11 @@ class Menu:
                 elif chosen_item >= len(self.items) + self.min_item:
                     raise ValueError("Value entered too large: %d"%chosen_item)
                 else:
-                    return self.items[chosen_item - self.min_item].evoke()
+                    break
             except ValueError as err:
                 print(err)
                 print("Try Again\n")
+        return self.items[chosen_item - self.min_item].evoke()
     
     #Add an item to this menu
     def add_item(self, text, callback, *args):
@@ -842,7 +862,23 @@ class MenuManager:
             self.menu_stack[-1].prompt()
 
 class FileManager:
-    pass #TODO
+    def __init__(self, dirc):
+        self.directory = dirc
+        if self.directory[-1] != os.sep:
+            self.directory += os.sep
+        self.file = None
+    
+    def set_file(self, filename):
+        self.file = filename
+    
+    def get_save_file(self, save_as = False):
+        if save_as or self.file is None:
+            self.file = input("File to save into: ")
+        return self.directory + self.file
+    
+    def get_open_file(self):
+        self.file = input("File to open: ")
+        return self.directory + self.file
 
 def print_delay(stuff):
     print(stuff)
@@ -958,6 +994,18 @@ if __name__ == '__main__':
             grade_menu.add_item(MenuEntityTextUpdater(student),\
                 roster.get_rubric(student).grade)
         main_menu.add_item("Grade a student", menu_manager.add_menu, grade_menu)
+    
+    #Menu items for saving and loading
+    file_manager = FileManager(out_dir)
+    def save(save_as):
+        fil = file_manager.get_save_file(save_as)
+        roster.save(fil)
+    main_menu.add_item("Save", save, False)
+    main_menu.add_item("Save As", save, True)
+    def load():
+        fil = file_manager.get_open_file()
+        roster.load(fil)
+    main_menu.add_item("Load", load)
     
     menu_manager.add_menu(main_menu)
     menu_manager.mainloop()
