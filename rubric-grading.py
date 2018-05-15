@@ -42,6 +42,13 @@ RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '&'
 
 TEX_FONT_SIZE = 12
 
+def seeded_input(msg, text):
+    readline.set_startup_hook(lambda: readline.insert_text(text))
+    try:
+        return input(msg)
+    finally:
+        readline.set_startup_hook()
+
 #Class representing an entity that can be graded (student or group)
 class GradedEntity:
     def __hash__(self):
@@ -809,8 +816,13 @@ class Rubric:
     def set_front_matter(self):
         global saved
         def modify_front_matter(label):
-            val = input("Enter value for \"%s\", or 0 to cancel: "%label)
+            fm_text = self.frontmatter_dict[label]
+            if fm_text is None:
+                fm_text = ""
+            val = seeded_input("Enter value for \"%s\", or 0 to cancel: "\
+                %label, fm_text)
             if val == '0':
+                print("Canceled")
                 return
             else:
                 saved = False
@@ -828,8 +840,11 @@ class Rubric:
         if self.auto_comment_menu is None:
             self.auto_comment_menu = Menu("Select category to add comment to:", menued = False)
             def auto_comment(item):
-                comment = input("Enter comment for %s, or 0 to cancel: "%item.get_name())
+                old_comment = item.get_comment()
+                comment = seeded_input("Enter comment for %s, or 0 to cancel: "\
+                %item.get_name(), old_comment)
                 if comment == '0':
+                    print("Canceled")
                     return
                 item.set_comment(comment)
             def traverser(item):
@@ -1104,7 +1119,12 @@ def assign_grade(item):
     print("Grading %s, out of %d"%(item.get_name(), item.get_value()))
     msg = "Please enter grade, blank to clear, or a non-number to cancel: "
     try:
-        grade = input(msg)
+        old_grade = item.get_score()
+        if old_grade is None:
+            old_grade = ""
+        else:
+            old_grade = str(old_grade)
+        grade = seeded_input(msg, old_grade)
         if len(grade) == 0:
             item.set_score(None)
         else:
@@ -1124,7 +1144,8 @@ def assign_comment(item):
     else:
         print("Comment for %s, score TBD"%item.get_name())
     msg = "Please enter comment, or 0 to cancel: "
-    comment = input(msg)
+    old_comment = item.get_comment()
+    comment = seeded_input(msg, old_comment)
     if comment == '0':
         print("Canceled")
     else:
