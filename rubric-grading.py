@@ -721,7 +721,24 @@ class Rubric:
             return self.menu
         self.menu = Menu("Select an item/category:")
         if len(self.frontmatter) > 0:
-            self.menu.add_item("Set Front Matter", self.set_front_matter)
+            def fm_update_text():
+                if len(self.frontmatter) == 1:
+                    return "Update Front Matter (%s = \"%s\")"%(self.frontmatter[0],\
+                        self.frontmatter_dict[self.frontmatter[0]])
+                else:
+                    todo_fm = []
+                    for fm in self.frontmatter:
+                        if self.frontmatter_dict[fm] is None:
+                            todo_fm.append(fm)
+                    if len(todo_fm) == 0:
+                        return "Update Front Matter"
+                    else:
+                        return "Update/Set Front Matter (%s)"%(', '.join(todo_fm))
+            fm_set = "Set Front Matter"
+            if len(self.frontmatter) == 1:
+                fm_set += ' (%s)'%self.frontmatter[0]
+            self.menu.add_item(ChangingText(fm_update_text, fm_set,\
+                self.some_front_matter), self.set_front_matter)
         self.total.add_items_to_menu(self.menu)
         self.menu.add_item("Set rest to 100%", self.total.fill_scores)
         return self.menu
