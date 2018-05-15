@@ -98,6 +98,10 @@ class Student(GradedEntity):
             return "%s %s"%(self.fname, self.lname)
         else:
             return "%s %s %s"%(self.fname, self.lname, self.email)
+    
+    #Does this student have an email address?
+    def has_email(self):
+        return self.email is not None
 
 #Convert a student and a prefix into a .tex name
 def make_tex_name(prefix, student):
@@ -378,6 +382,11 @@ class Roster:
         if verbose:
             print()
         print("All .pdf files compiled successfully\n")
+    
+    #Send emails to students
+    def email(self, pdf_prefix):
+        #TODO
+        pass
 
 
 class ItemChangingText:
@@ -396,6 +405,8 @@ class ItemChangingText:
                 ret += " (%d/%d)"%(self.item.get_score(), self.item.get_value())
             if self.item.get_comment() != "":
                 ret += " \"%s\""%self.item.get_comment()
+        if self.item.is_changed():
+            ret = "* " + ret
         return ret
 
 
@@ -408,12 +419,14 @@ class Item:
         self.score = None
         self.comment = ""
         self.edit_menu = None
+        self.changed = False
         self.id = Item.next_id
         Item.next_id += 1
 
     def set_comment(self, comment):
         global saved
         saved = False
+        self.changed = True
         self.comment = comment
 
     def get_comment(self):
@@ -422,6 +435,7 @@ class Item:
     def set_score(self, score):
         global saved
         saved = False
+        self.changed = True
         self.score = score
 
     def get_score(self):
@@ -462,6 +476,12 @@ class Item:
 
     def has_own_field(self):
         return True
+    
+    def is_changed(self):
+        return self.changed
+    
+    def save(self):
+        self.changed = False
 
     # def add_items_to_menu(self, menu):
     #     if self.edit_menu is None:
@@ -639,6 +659,27 @@ class Category(Item):
             if item.get_score() is None:
                 item.set_score(item.get_value())
         self.traverse(fill_scores_action)
+    
+    #Mark this Category and all its children as saved
+    def save(self):
+        def action(item):
+            if item != self:
+                item.save()
+            else:
+                super().save()
+        self.traverse(action, ignore_blanks = False)
+    
+    #Check for unsaved changes anywhere in the heirarchy
+    def is_deep_changed(self):
+        def action(item):
+            return item.is_changed()
+        ret = False
+        def accum(add_bool):
+            nonlocal ret
+            ret = ret or add_bool
+        self.traverse(action, accum, ignore_blanks = False)
+        return ret
+            
 
 class FrontmatterChangingText:
     def __init__(self, fm, fm_dict):
@@ -659,6 +700,8 @@ class Rubric:
         self.menu = None
         self.frontmatter_menu = None
         self.auto_comment_menu = None
+        #Flag to keep track of if this thing has been saved
+        self.changed = False
         if isinstance(from_file_or_rubric, Rubric):
             #We're making a copy
             other = from_file_or_rubric
@@ -776,22 +819,26 @@ class Rubric:
     #Then, modify the copy to only use children defined by the given student
     def customize(self, student):
         return Rubric(self, student)
-
+    
+    #Is all the front matter set?
     def full_front_matter(self):
         for fm in self.frontmatter:
             if self.frontmatter_dict[fm] is None:
                 return False
         return True
-
+    
+    #Is any of the front matter set?
     def some_front_matter(self):
         for fm in self.frontmatter:
             if self.frontmatter_dict[fm] is not None:
                 return True
         return False
-
+    
+    #Is every field graded?
     def is_filled(self):
         return self.total.get_score() is not None
 
+    #Is any field graded and/or commented?
     def is_in_progress(self):
         def checker(item):
             return item.get_score() is not None or item.get_comment() != ''
@@ -801,7 +848,8 @@ class Rubric:
             ret = ret or add_bool
         self.total.traverse(checker, accumulator, ignore_blanks = False)
         return ret
-
+    
+    #Does any auto-calculated field have a comment?
     def is_auto_comment_in_progress(self):
         def checker(item):
             return not item.has_own_field() and item.get_comment() != ''
@@ -826,6 +874,7 @@ class Rubric:
                 return
             else:
                 saved = False
+                self.changed = True
                 self.frontmatter_dict[label] = val
         if len(self.frontmatter) == 1:
             modify_front_matter(self.frontmatter[0])
@@ -846,6 +895,7 @@ class Rubric:
                 if comment == '0':
                     print("Canceled")
                     return
+                self.changed = True
                 item.set_comment(comment)
             def traverser(item):
                 if not item.has_own_field():
@@ -889,6 +939,14 @@ class Rubric:
     def grade(self):
         #return self.get_menu().prompt()
         MenuManager.get_menu_manager().add_menu(self.get_menu())
+    
+    #Mark everything as not changed
+    def save(self):
+        self.changed = False
+        self.total.save()
+    
+    def is_changed(self):
+        return self.changed or self.total.is_deep_changed()
 
     #Convert to a string that can be imported
     def export_rubric(self):
@@ -932,6 +990,7 @@ class Rubric:
             nonlocal ret
             ret += add_str
         self.total.traverse(transcriber, accumulator, ignore_blanks = False)
+        self.save()
         return ret
 
     #Import a string created by export
@@ -976,6 +1035,7 @@ class Rubric:
                 item.set_comment(insertions[key][1])
                 del insertions[key]
         self.total.traverse(importer, ignore_blanks = False)
+        self.save()
 
     #Get comma-separated list of categories
     def get_category_csv(self):
@@ -1117,7 +1177,7 @@ class Menu:
 
 def assign_grade(item):
     print("Grading %s, out of %d"%(item.get_name(), item.get_value()))
-    msg = "Please enter grade, blank to clear, or a non-number to cancel: "
+    msg = "Enter grade, blank to clear, or a non-number to cancel: "
     try:
         old_grade = item.get_score()
         if old_grade is None:
@@ -1133,6 +1193,7 @@ def assign_grade(item):
             else:
                 grade = int(grade)
             item.set_score(grade)
+            print(item.is_changed())
     except ValueError:
         print("Canceled")
         pass
@@ -1280,9 +1341,14 @@ class FileManager:
         return self.get_cond_file("File to export into: ", FileManager.CSV_KEY,\
             save_as = save_as)
 
-    def get_pdf_prefix(self, student, save_as = False):
+    def get_pdf_prefix(self, student = None, save_as = False):
+        def the_exister(a, s):
+            if s is None:
+                return '.'
+            else:
+                return a + make_tex_name(s, student)
         return self.get_cond_file("PDF prefix to use: ", FileManager.PDF_KEY,\
-            exister = lambda a, s: a + make_tex_name(s, student),\
+            exister = the_exister,\
             confirmer = "Warning: Prefix %s already in use. Overwrite?")
             #, returner = lambda a, s: s, save_as = save_as)
 
@@ -1418,17 +1484,20 @@ if __name__ == '__main__':
         def __str__(self):
             ret = str(self.entity)
             tack = None
-            if roster.get_rubric(self.entity).is_filled():
+            the_rubric = roster.get_rubric(self.entity)
+            if the_rubric.is_filled():
                 #ret = '(done) ' + ret
                 tack = 'done'
-            elif roster.get_rubric(self.entity).is_in_progress() or\
-                    roster.get_rubric(self.entity).some_front_matter():
+            elif the_rubric.is_in_progress() or\
+                    the_rubric.some_front_matter():
                 #ret = '(in progress) ' + ret
                 tack = 'in progress'
             if tack is not None:
-                if not roster.get_rubric(self.entity).full_front_matter():
+                if not the_rubric.full_front_matter():
                     tack += '*'
                 ret = '(%s) '%tack + ret
+            if the_rubric.is_changed():
+                ret = '* ' + ret
             return ret
 
     main_menu = Menu("What would you like to do?", back = False)
@@ -1497,6 +1566,12 @@ if __name__ == '__main__':
         pdf_menu.prompt()
     main_menu.add_item("Export PDFs", prompt_pdf, False)
     main_menu.add_item("Export PDFs as", prompt_pdf, True)
+    if roster.get_a_student(all = True).has_email():
+        #Supports email
+        def email():
+            prefix = file_manager.get_pdf_prefix()
+            roster.email(prefix)
+        main_menu.add_item("Email PDFs", email)
 
     menu_manager.add_menu(main_menu)
     menu_manager.mainloop()
