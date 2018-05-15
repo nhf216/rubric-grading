@@ -249,6 +249,7 @@ class Roster:
 
     #Save all the rubrics
     def save(self, file):
+        global saved
         fd = open(file, 'w')
         try:
             for entity in self.graded_entities:
@@ -259,9 +260,11 @@ class Roster:
             raise
         fd.close()
         print("Successfully saved in %s\n"%file[file.rfind(os.sep)+1:])
+        saved = True
 
     #Load all the rubrics
     def load(self, file):
+        global saved
         fd = open(file, 'r')
         cur_entity = None
         buffer = ""
@@ -289,6 +292,7 @@ class Roster:
             raise
         fd.close()
         print("%s loaded successfully\n"%file[file.rfind(os.sep)+1:])
+        saved = True
 
     #Export grades into a CSV file
     def export_csv(self, csv_filename):
@@ -401,12 +405,16 @@ class Item:
         Item.next_id += 1
 
     def set_comment(self, comment):
+        global saved
+        saved = False
         self.comment = comment
 
     def get_comment(self):
         return self.comment
 
     def set_score(self, score):
+        global saved
+        saved = False
         self.score = score
 
     def get_score(self):
@@ -799,11 +807,13 @@ class Rubric:
 
     #Set front matter for this rubric
     def set_front_matter(self):
+        global saved
         def modify_front_matter(label):
             val = input("Enter value for \"%s\", or 0 to cancel: "%label)
             if val == '0':
                 return
             else:
+                saved = False
                 self.frontmatter_dict[label] = val
         if len(self.frontmatter) == 1:
             modify_front_matter(self.frontmatter[0])
@@ -1324,6 +1334,59 @@ if __name__ == '__main__':
     if verbose:
         print("Blank rubrics initialized")
 
+    #Stuff for saving when exiting
+    file_manager = FileManager(out_dir)
+    def save(save_as=False):
+        fil = file_manager.get_save_file(save_as)
+        if fil is not None:
+            roster.save(fil)
+            return True
+        else:
+            return False
+
+    def save_and_exit():
+        if save():
+            sys.exit(0)
+
+    saved = True
+    def exit_with_save_prompt():
+        global saved
+        if not saved:
+            save_warning_menu = Menu("Quit and lose unsaved changes?", back = False)
+            save_warning_menu.add_item("Save and Quit", save_and_exit)
+            save_warning_menu.add_item("Cancel", lambda : None)
+            save_warning_menu.add_item("Quit without Saving", sys.exit, 0)
+            save_warning_menu.prompt()
+        else:
+            sys.exit(0)
+
+    def load():
+        try:
+            fil = file_manager.get_open_file()
+        except FileNotFoundError as err:
+            print("Error: %s\n"%str(err))
+            return
+        roster.load(fil)
+
+    def save_and_load():
+        if save():
+            load()
+
+    def load_with_save_prompt():
+        global saved
+        if not saved:
+            save_warning_menu = Menu("Overwrite unsaved changes?", back = False)
+            save_warning_menu.add_item("Save then Load", save_and_load)
+            save_warning_menu.add_item("Cancel", lambda : None)
+            save_warning_menu.add_item("Load and Overwrite", load)
+            save_warning_menu.prompt()
+        else:
+            load()
+
+    def is_saved():
+        global saved
+        return saved
+
     #Build the menu
     menu_manager = MenuManager.get_menu_manager()
     #Class used to update menu text when things are graded
@@ -1348,7 +1411,7 @@ if __name__ == '__main__':
             return ret
 
     main_menu = Menu("What would you like to do?", back = False)
-    main_menu.add_item("Quit", sys.exit, 0)
+    main_menu.add_item(ChangingText("Quit", "Quit*", is_saved), exit_with_save_prompt)
     main_menu.add_item("Display Roster", print_delay, roster)
     main_menu.add_item("Display Rubric", print_delay, rubric)
     #Menu for viewing student rubrics
@@ -1381,21 +1444,9 @@ if __name__ == '__main__':
         main_menu.add_item("Grade a student", menu_manager.add_menu, grade_menu)
 
     #Menu items for saving and loading
-    file_manager = FileManager(out_dir)
-    def save(save_as):
-        fil = file_manager.get_save_file(save_as)
-        if fil is not None:
-            roster.save(fil)
     main_menu.add_item("Save", save, False)
     main_menu.add_item("Save As", save, True)
-    def load():
-        try:
-            fil = file_manager.get_open_file()
-        except FileNotFoundError as err:
-            print("Error: %s\n"%str(err))
-            return
-        roster.load(fil)
-    main_menu.add_item("Load", load)
+    main_menu.add_item(ChangingText("Load", "Load*", is_saved), load_with_save_prompt)
 
     #Export CSV
     def export_csv(save_as):
