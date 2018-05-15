@@ -37,6 +37,7 @@ RUBRIC_POINT_SEP = '~'
 
 ROSTER_SAVE_SYMBOL = '?'
 RUBRIC_SAVE_SEPARATOR = ':'
+RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '&'
 
 #Class representing an entity that can be graded (student or group)
 class GradedEntity:
@@ -271,8 +272,9 @@ class Roster:
 
     #Export rubrics into PDFs (via .tex files)
     def export_pdfs(self, pdf_prefix, only_finished = False, all = False, verbose = False):
-        #TODO
-        pass
+        for student in self.get_students():
+            rubric = self.get_rubric(student)
+            #TODO
 
 
 class ItemChangingText:
@@ -527,22 +529,45 @@ class Category(Item):
                 item.set_score(item.get_value())
         self.traverse(fill_scores_action)
 
+class FrontmatterChangingText:
+    def __init__(self, fm, fm_dict):
+        self.fm = fm
+        self.fm_dict = fm_dict
+
+    def __str__(self):
+        if fm_dict[fm] is None:
+            return fm
+        else:
+            return "%s (\"%s\")"%(fm, fm_dict[fm])
+        ret = self.item.get_name()
+        if self.item.get_score() is None:
+            ret += " (out of %d)"%(self.item.get_value())
+        else:
+            ret += " (%d/%d)"%(self.item.get_score(), self.item.get_value())
+        if self.item.get_comment() != "":
+            ret += " \"%s\""%self.item.get_comment()
+        return ret
+
 #Class representing a rubric
 class Rubric:
     #Constructor
     def __init__(self, from_file_or_rubric, reference_student = None):
         #Menu
         self.menu = None
+        self.frontmatter_menu = None
         if isinstance(from_file_or_rubric, Rubric):
             #We're making a copy
             other = from_file_or_rubric
             self.frontmatter = list(other.frontmatter)
+            self.frontmatter_dict = dict(other.frontmatter_dict)
             self.total = other.total.copy(reference_student)
             return
         #It's from a file
         from_file = from_file_or_rubric
         #Things that need to be manually entered (e.g. a title)
         self.frontmatter = []
+        self.frontmatter_dict = dict()
+        self.frontmatter_menu = None
         #List of categories
         self.total = Category("TOTAL")
         #Keep track of current category
@@ -561,6 +586,7 @@ class Rubric:
                 #Check if it's front matter
                 if line[0] == RUBRIC_FRONT_MATTER:
                     self.frontmatter.append(line[1:])
+                    self.frontmatter_dict[line[1:]] = None
                 #Check if it's a category
                 elif line[0] == RUBRIC_CATEGORY:
                     cat_name = line[1:]
@@ -628,7 +654,13 @@ class Rubric:
         #         ret += "\n%s"%str(item)
         # ret += '\n%s'%str(self.total)
         # return ret
-        return self.total.deep_str()
+        ret = ''
+        for fm in self.frontmatter:
+            if self.frontmatter_dict[fm] is None:
+                ret += "%s: (empty)\n"%fm
+            else:
+                ret += "%s: %s\n"%(fm, self.frontmatter_dict[fm])
+        return ret + self.total.deep_str()
 
     #If graded_entity is a FrozenGroup, find all non-group-respecting Categories
     #and replace them with one per individual
@@ -641,6 +673,18 @@ class Rubric:
     #Then, modify the copy to only use children defined by the given student
     def customize(self, student):
         return Rubric(self, student)
+
+    def full_front_matter(self):
+        for fm in self.frontmatter:
+            if self.frontmatter_dict[fm] is None:
+                return False
+        return True
+
+    def some_front_matter(self):
+        for fm in self.frontmatter:
+            if self.frontmatter_dict[fm] is not None:
+                return True
+        return False
 
     def is_filled(self):
         return self.total.get_score() is not None
@@ -655,11 +699,29 @@ class Rubric:
         self.total.traverse(checker, accumulator)
         return ret
 
+    #Set front matter for this rubric
+    def set_front_matter(self):
+        def modify_front_matter(label):
+            val = input("Enter value for \"%s\", or 0 to cancel: "%label)
+            if val == '0':
+                return
+            else:
+                self.frontmatter_dict[label] = val
+        if len(self.frontmatter) == 1:
+            modify_front_matter(self.frontmatter[0])
+        elif self.frontmatter_menu is None:
+            self.frontmatter_menu = Menu("Select item:", menued = False)
+            for fm in self.frontmatter:
+                self.frontmatter_menu.add_item(FrontmatterChangingText(fm,\
+                    self.frontmatter_dict), modify_front_matter, fm)
+
     #Build a menu out of this rubric
     def get_menu(self):
         if self.menu is not None:
             return self.menu
         self.menu = Menu("Select an item/category:")
+        if len(self.frontmatter) > 0:
+            self.menu.add_item("Set Front Matter", self.set_front_matter)
         self.total.add_items_to_menu(self.menu)
         self.menu.add_item("Set rest to 100%", self.total.fill_scores)
         return self.menu
@@ -692,6 +754,12 @@ class Rubric:
             else:
                 return ""
         ret = ""
+        #Front matter
+        for fm in self.frontmatter:
+            fdv = self.frontmatter_dict[fm]
+            if fdv is not None:
+                ret += '%s%s%s%s\n'%(RUBRIC_FRONT_MATTER_SAVE_INDICATOR, fm,\
+                    RUBRIC_SAVE_SEPARATOR, fdv)
         def accumulator(add_str):
             nonlocal ret
             ret += add_str
@@ -707,6 +775,10 @@ class Rubric:
             if line.strip() == '':
                 continue
             line_pieces = line.split(RUBRIC_SAVE_SEPARATOR)
+            if line_pieces[0][0] == RUBRIC_FRONT_MATTER_SAVE_INDICATOR:
+                #Front matter
+                self.frontmatter_dict[line_pieces[0][1:]] = line_pieces[1]
+                continue
             the_id = int(line_pieces[0])
             if not (len(line_pieces[1]) == 0 or line_pieces[1].isdecimal()\
                     or (line_pieces[1][0] == '-' and line_pieces[1][1:].isdecimal())):
@@ -1077,10 +1149,18 @@ if __name__ == '__main__':
 
         def __str__(self):
             ret = str(self.entity)
+            tack = None
             if roster.get_rubric(self.entity).is_filled():
-                ret = '(done) ' + ret
-            elif roster.get_rubric(self.entity).is_in_progress():
-                ret = '(in progress) ' + ret
+                #ret = '(done) ' + ret
+                tack = 'done'
+            elif roster.get_rubric(self.entity).is_in_progress() or\
+                    roster.get_rubric(self.entity).some_front_matter():
+                #ret = '(in progress) ' + ret
+                tack = 'in progress'
+            if tack is not None:
+                if not roster.get_rubric(self.entity).full_front_matter():
+                    tack += '*'
+                ret = '(%s) '%tack + ret
             return ret
 
     main_menu = Menu("What would you like to do?", back = False)
