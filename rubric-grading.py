@@ -214,7 +214,7 @@ class Roster:
             fd.close()
             raise
         fd.close()
-        print("Successfully saved in %s\n"%file)
+        print("Successfully saved in %s\n"%file[file.find(os.sep)+1:])
     
     #Load all the rubrics
     def load(self, file):
@@ -244,7 +244,7 @@ class Roster:
             fd.close()
             raise
         fd.close()
-        print("%s loaded successfully\n"%file)
+        print("%s loaded successfully\n"%file[file.find(os.sep)+1:])
             
 
 class ItemChangingText:
@@ -617,6 +617,16 @@ class Rubric:
     def is_filled(self):
         return self.total.get_score() is not None
     
+    def is_in_progress(self):
+        def checker(item):
+            return item.get_score() is not None or item.get_comment() != ''
+        ret = False
+        def accumulator(add_bool):
+            nonlocal ret
+            ret = ret or add_bool
+        self.total.traverse(checker, accumulator)
+        return ret
+    
     #Build a menu out of this rubric
     def get_menu(self):
         if self.menu is not None:
@@ -873,11 +883,28 @@ class FileManager:
     
     def get_save_file(self, save_as = False):
         if save_as or self.file is None:
-            self.file = input("File to save into: ")
+            fil = input("File to save into: ")
+            if os.path.isfile(self.directory + fil):
+                #Confirm overwriting file
+                confirmed = False
+                def confirm(to_confirm):
+                    nonlocal confirmed
+                    confirmed = to_confirm
+                confirm_menu = Menu("Warning: %s already exists. Overwrite?",\
+                    back = False)
+                confirm_menu.add_item("Yes", confirm, True)
+                confirm_menu.add_item("No", confirm, False)
+                confirm_menu.prompt()
+                if not confirmed:
+                    return None
+            self.file = fil
         return self.directory + self.file
     
     def get_open_file(self):
-        self.file = input("File to open: ")
+        fil = input("File to open: ")
+        if not os.path.isfile(self.directory + fil):
+            raise FileNotFoundError("File %s not found"%fil)
+        self.file = fil
         return self.directory + self.file
 
 def print_delay(stuff):
@@ -951,6 +978,18 @@ if __name__ == '__main__':
     
     #Build the menu
     menu_manager = MenuManager.get_menu_manager()
+    #Class used to update menu text when things are graded
+    class MenuEntityTextUpdater:
+        def __init__(self, entity):
+            self.entity = entity
+        
+        def __str__(self):
+            ret = str(self.entity)
+            if roster.get_rubric(self.entity).is_filled():
+                ret = '(done) ' + ret
+            elif roster.get_rubric(self.entity).is_in_progress():
+                ret = '(in progress) ' + ret
+            return ret
     
     main_menu = Menu("What would you like to do?", back = False)
     main_menu.add_item("Quit", sys.exit, 0)
@@ -961,24 +1000,14 @@ if __name__ == '__main__':
     def print_rubric(entity):
         print_delay(roster.get_rubric(entity))
     for student in roster.get_students():
-        student_menu.add_item(student, print_rubric, student)
+        student_menu.add_item(MenuEntityTextUpdater(student), print_rubric, student)
     #main_menu.add_item("View Rubric by Student", menu_manager.add_menu, student_menu)
     main_menu.add_item("View Rubric by Student", student_menu.prompt)
-    #Class used to update menu text when things are graded
-    class MenuEntityTextUpdater:
-        def __init__(self, entity):
-            self.entity = entity
-        
-        def __str__(self):
-            ret = str(self.entity)
-            if roster.get_rubric(self.entity).is_filled():
-                ret = '(done) ' + ret
-            return ret
     if roster.is_using_groups():
         #Menu for viewing group rubrics
         group_menu = Menu("Select a group:", menued = False)
         for group in roster:
-            group_menu.add_item(group, print_rubric, group)
+            group_menu.add_item(MenuEntityTextUpdater(group), print_rubric, group)
         #main_menu.add_item("View Rubric by Group", menu_manager.add_menu, group_menu)
         main_menu.add_item("View Rubric by Group", group_menu.prompt)
         #Menu for editing rubrics
@@ -999,11 +1028,16 @@ if __name__ == '__main__':
     file_manager = FileManager(out_dir)
     def save(save_as):
         fil = file_manager.get_save_file(save_as)
-        roster.save(fil)
+        if fil is not None:
+            roster.save(fil)
     main_menu.add_item("Save", save, False)
     main_menu.add_item("Save As", save, True)
     def load():
-        fil = file_manager.get_open_file()
+        try:
+            fil = file_manager.get_open_file()
+        except FileNotFoundError as err:
+            print("Error: %s\n"%str(err))
+            return
         roster.load(fil)
     main_menu.add_item("Load", load)
     
