@@ -151,31 +151,39 @@ def make_tex_word(strg):
 #Class representing an email template
 class EmailTemplate:
     def __init__(self, message = None, closing = None, subject = None,\
-            my_email = None, greeting = "Dear %s,", pdf_prefix = ""):
+            my_email = None, my_name = None, greeting = "Dear %s,", pdf_prefix = ""):
         self.message = message
         self.closing = closing
         self.greeting = greeting
         self.pdf_prefix = pdf_prefix
         self.subject = subject
         self.from_email = my_email
+        self.from_name = my_name
 
     #Prepare an email to the given student
-    def render(self, student, dirc, message = None):
+    def render(self, student, message = None):
         body = message
         if body is None:
             body = self.message
-        the_directory = dirc
-        if the_directory[-1] != os.sep:
-            the_directory += os.sep
+        # the_directory = dirc
+        # if the_directory[-1] != os.sep:
+        #     the_directory += os.sep
         email = email.message.EmailMessage()
         email.set_content("%s\n\n\t%s\n\n%s"%(self.greeting%student.fname, body, self.closing))
         email['Subject'] = self.subject
-        email['From'] = self.from_email
-        email['To'] = student.email
+        email['From'] = "%s <%s>"%(self.from_name, self.from_email)
+        email['To'] = "%s %s <%s>"%(student.fname, student.lname, student.email)
         pdf_name = make_pdf_name(self.pdf_prefix student)
-        with open(the_directory + pdf_name, 'rb') as att:
+        file_name = pdf_name[pdf_name.rfind(os.sep)+1:]
+        with open(pdf_name, 'rb') as att:
             att_data = att.read()
-        email.add_attachment(att_data, maintype='pdf', filename=pdf_name)
+        ctype, encoding = mimetypes.guess_type(pdf_name)
+        if ctype is None or encoding is not None:
+            # No guess could be made, or the file is encoded (compressed), so
+            # use a generic bag-of-bits type.
+            ctype = 'application/octet-stream'
+        maintype, subtype = ctype.split('/', 1)
+        email.add_attachment(att_data, maintype=maintype, subtype=subtype, filename=file_name)
         return email
 
 #Class representing all the graded entities in the class
@@ -438,8 +446,77 @@ class Roster:
 
     #Send emails to students
     def email(self, pdf_prefix, email_manager):
-        #TODO
-        pass
+        #Prepare subject
+        subject = input("Email subject: ")
+        #Prepare greeting
+        greeting = seeded_input("Email greeting (use %s for student name): ", "Dear %s,")
+        #Prepare email body
+        print("Email body (to break lines, end with \\):")
+        body = ""
+        while True:
+            body_piece = input()
+            body += body_piece
+            if len(body_piece) > 0 and body_piece[-1] == '\\':
+                body = body[:-1]
+            else:
+                break
+        #Prepare closing
+        print("Email closing (e.g. your name):")
+        closing = ""
+        while True:
+            closing_piece = input()
+            closing += closing_piece
+            if len(closing_piece) > 0 and closing_piece[-1] == '\\':
+                closing = closing[:-1]
+            else:
+                break
+        #Set the template
+        email_template = EmailTemplate(message = body, closing = closing,\
+            subject = subject, my_email = email_manager.get_email(),\
+            my_name = email_manager.get_name(), greeting = greeting,\
+            pdf_prefix = pdf_prefix))
+        send_ok = True
+        new_body = False
+        previewed = False
+        def send_not_ok():
+            nonlocal send_ok
+            send_ok = False
+        def edit_body():
+            nonlocal new_body
+            body = seeded_input("Edit body: ", body)
+            new_body = True
+        def preview_pdf():
+            nonlocal previewed
+            previewed = True
+            print("PDF preview not currently supported")
+        email_edit_menu = Menu("Action", back = False)
+        email_edit_menu.add_item("Looks good!", lambda : None)
+        email_edit_menu.add_item("Don't send!", send_not_ok)
+        email_edit_menu.add_item("Edit body", edit_body)
+        email_edit_menu.add_item("Preview PDF", preview_pdf)
+        #Log into email_manager
+        email_manager.login()
+        #Go through students
+        for student in self.get_students():
+            if os.path.isfile(make_pdf_name(pdf_prefix, student)):
+                send_ok = True
+                while True:
+                    #Prep email
+                    if not previewed:
+                        email = email_template.render(student, message = body)
+                    #Offer to edit
+                    new_body = False
+                    previewed = False
+                    print(email)
+                    #Proof
+                    email_edit_menu.prompt()
+                    if not new_body and not previewed:
+                        break
+                #Send
+                if send_ok:
+                    email_manager.send_message(email)
+        #Log out of email_manager
+        email_manager.logout()
 
 
 class ItemChangingText:
@@ -542,17 +619,6 @@ class Item:
 
     def save(self):
         self.changed = False
-
-    # def add_items_to_menu(self, menu):
-    #     if self.edit_menu is None:
-    #         self.edit_menu = EditMenu(self)
-    #     #menu.add_item(self.get_name(), self.edit_menu.prompt)
-    #     menu.add_item(ItemChangingText(self), self.edit_menu.prompt)
-
-    # #If score is None, make it 100%
-    # def fill_scores(self):
-    #     if self.get_score() is None:
-    #         self.set_score(self.get_value())
 
     def traverse(self, action, accum, ignore_blanks = True):
         if accum is None:
@@ -678,22 +744,6 @@ class Category(Item):
             new_cat.add_item(item.copy(reference_student))
         return new_cat
 
-    # def add_items_to_menu(self, menu):
-    #     #print("hello")
-    #     #print(self)
-    #     if len(self.children) > 0:
-    #         #print("has children")
-    #         #print(self.children)
-    #         for child in self.children.values():
-    #             child.add_items_to_menu(menu)
-    #     elif self.has_own_field():
-    #         #print("entering super")
-    #         super().add_items_to_menu(menu)
-    #         #print("leaving super")
-    #     for item in self:
-    #         item.add_items_to_menu(menu)
-    #     #print("Done with ", self)
-    #     #print()
     def add_items_to_menu(self, menu):
         def add_items_to_menu_action(item):
             if item.edit_menu is None:
@@ -702,17 +752,6 @@ class Category(Item):
             menu.add_item(ItemChangingText(item), item.edit_menu.prompt)
         self.traverse(add_items_to_menu_action)
 
-    # #Fill in all unfilled scores with 100%
-    # def fill_scores(self):
-    #     if len(self.children) > 0:
-    #         for child in self.children.values():
-    #             child.fill_scores()
-    #     elif self.has_own_field():
-    #         #print("entering super")
-    #         super().fill_scores()
-    #         #print("leaving super")
-    #     for item in self:
-    #         item.fill_scores()
     #Fill in all unfilled scores with 100%
     def fill_scores(self):
         def fill_scores_action(item):
@@ -852,14 +891,6 @@ class Rubric:
         fd.close()
 
     def __str__(self):
-        # ret = '%s\n'%('\n'.join(self.frontmatter))
-        # #for category in self.categories:
-        # for category in self.total:
-        #     ret += '\nCATEGORY: %s'%str(category)
-        #     for item in category:
-        #         ret += "\n%s"%str(item)
-        # ret += '\n%s'%str(self.total)
-        # return ret
         ret = ''
         for fm in self.frontmatter:
             if self.frontmatter_dict[fm] is None:
@@ -1397,23 +1428,6 @@ class FileManager:
     def get_save_file(self, save_as = False):
         return self.get_cond_file("File to save into: ", FileManager.FILE_KEY,\
             save_as = save_as)
-        # if save_as or self.file is None:
-        #     fil = input("File to save into: ")
-        #     if os.path.isfile(self.directory + fil):
-        #         #Confirm overwriting file
-        #         confirmed = False
-        #         def confirm(to_confirm):
-        #             nonlocal confirmed
-        #             confirmed = to_confirm
-        #         confirm_menu = Menu("Warning: %s already exists. Overwrite?",\
-        #             back = False)
-        #         confirm_menu.add_item("Yes", confirm, True)
-        #         confirm_menu.add_item("No", confirm, False)
-        #         confirm_menu.prompt()
-        #         if not confirmed:
-        #             return None
-        #     self.file = fil
-        # return self.directory + self.file
 
     def get_open_file(self):
         fil = input("File to open: ")
@@ -1549,6 +1563,14 @@ class EmailManager:
             except KeyboardInterrupt:
                 get_out()
 
+    #Get your name
+    def get_name(self):
+        return self.name
+
+    #Get your email address
+    def get_email(self):
+        return self.email
+
     #Log into both servers
     def login(self):
         self.imap_login()
@@ -1666,7 +1688,7 @@ class EmailManager:
         #SMTP stuff
         self.smtp_server.send_message(email)
         if self.verbose:
-            print("Message sent!")
+            print("Message sent")
 
 def print_delay(stuff):
     print(stuff)
