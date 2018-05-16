@@ -5,6 +5,8 @@ import readline
 import collections
 import subprocess
 
+import email.message
+
 #Facilitate grading stuff with a rubric for lots of students
 #Input 1: class list, with email addresses and optional groups
 #Input 2: rubric, with optional categories
@@ -114,8 +116,14 @@ class Student(GradedEntity):
         return self.email is not None
 
 #Convert a student and a prefix into a .tex name
+def make_file_name(prefix, student, extention):
+    return "%s_%s_%s.%s"%(prefix, student.lname, student.fname, extension)
+
 def make_tex_name(prefix, student):
-    return "%s_%s_%s.tex"%(prefix, student.lname, student.fname)
+    return make_file_name(prefix, student, '.tex')
+
+def make_pdf_name(prefix, student):
+    return make_file_name(prefix, student, '.pdf')
 
 #Helpers for splittable
 def in_char_range(char, a, b):
@@ -134,6 +142,35 @@ def make_tex_word(strg):
         if is_splittable(letter):
             ret.append('{\\allowbreak}')
     return ''.join(ret)
+
+#Class representing an email template
+class EmailTemplate:
+    def __init__(self, message = None, closing = None, subject = None,\
+            my_email = None, greeting = "Dear %s,", pdf_prefix = ""):
+        self.message = message
+        self.closing = closing
+        self.greeting = greeting
+        self.pdf_prefix = pdf_prefix
+        self.subject = subject
+        self.from_email = my_email
+    
+    #Prepare an email to the given student
+    def render(self, student, dirc, message = None):
+        body = message
+        if body is None:
+            body = self.message
+        the_directory = dirc
+        if the_directory[-1] != os.sep:
+            the_directory += os.sep
+        email = email.message.EmailMessage()
+        email.set_content("%s\n\n\t%s\n\n%s"%(self.greeting%student.fname, body, self.closing))
+        email['Subject'] = self.subject
+        email['From'] = self.from_email
+        email['To'] = student.email
+        with open(the_directory + make_pdf_name(self.pdf_prefix,\
+                student), 'rb') as att:
+            att_data = att.read()
+        email.add_attachment(att_data, maintype='pdf')
 
 #Class representing all the graded entities in the class
 class Roster:
