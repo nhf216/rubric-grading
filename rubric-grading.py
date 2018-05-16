@@ -6,6 +6,11 @@ import collections
 import subprocess
 
 import email.message
+import imaplib
+import smtplib
+import time
+import getpass
+import mimetypes
 
 #Facilitate grading stuff with a rubric for lots of students
 #Input 1: class list, with email addresses and optional groups
@@ -110,7 +115,7 @@ class Student(GradedEntity):
             return "%s %s"%(self.fname, self.lname)
         else:
             return "%s %s %s"%(self.fname, self.lname, self.email)
-    
+
     #Does this student have an email address?
     def has_email(self):
         return self.email is not None
@@ -153,7 +158,7 @@ class EmailTemplate:
         self.pdf_prefix = pdf_prefix
         self.subject = subject
         self.from_email = my_email
-    
+
     #Prepare an email to the given student
     def render(self, student, dirc, message = None):
         body = message
@@ -167,10 +172,11 @@ class EmailTemplate:
         email['Subject'] = self.subject
         email['From'] = self.from_email
         email['To'] = student.email
-        with open(the_directory + make_pdf_name(self.pdf_prefix,\
-                student), 'rb') as att:
+        pdf_name = make_pdf_name(self.pdf_prefix student)
+        with open(the_directory + pdf_name, 'rb') as att:
             att_data = att.read()
-        email.add_attachment(att_data, maintype='pdf')
+        email.add_attachment(att_data, maintype='pdf', filename=pdf_name)
+        return email
 
 #Class representing all the graded entities in the class
 class Roster:
@@ -429,9 +435,9 @@ class Roster:
         if verbose:
             print()
         print("All .pdf files compiled successfully\n")
-    
+
     #Send emails to students
-    def email(self, pdf_prefix):
+    def email(self, pdf_prefix, email_manager):
         #TODO
         pass
 
@@ -530,10 +536,10 @@ class Item:
 
     def has_own_field(self):
         return True
-    
+
     def is_changed(self):
         return self.changed
-    
+
     def save(self):
         self.changed = False
 
@@ -713,7 +719,7 @@ class Category(Item):
             if item.get_score() is None:
                 item.set_score(item.get_value())
         self.traverse(fill_scores_action)
-    
+
     #Mark this Category and all its children as saved
     def save(self):
         def action(item):
@@ -722,7 +728,7 @@ class Category(Item):
             else:
                 super().save()
         self.traverse(action, ignore_blanks = False)
-    
+
     #Check for unsaved changes anywhere in the heirarchy
     def is_deep_changed(self):
         def action(item):
@@ -733,7 +739,7 @@ class Category(Item):
             ret = ret or add_bool
         self.traverse(action, accum, ignore_blanks = False)
         return ret
-            
+
 
 class FrontmatterChangingText:
     def __init__(self, fm, fm_dict):
@@ -873,21 +879,21 @@ class Rubric:
     #Then, modify the copy to only use children defined by the given student
     def customize(self, student):
         return Rubric(self, student)
-    
+
     #Is all the front matter set?
     def full_front_matter(self):
         for fm in self.frontmatter:
             if self.frontmatter_dict[fm] is None:
                 return False
         return True
-    
+
     #Is any of the front matter set?
     def some_front_matter(self):
         for fm in self.frontmatter:
             if self.frontmatter_dict[fm] is not None:
                 return True
         return False
-    
+
     #Is every field graded?
     def is_filled(self):
         return self.total.get_score() is not None
@@ -902,7 +908,7 @@ class Rubric:
             ret = ret or add_bool
         self.total.traverse(checker, accumulator, ignore_blanks = False)
         return ret
-    
+
     #Does any auto-calculated field have a comment?
     def is_auto_comment_in_progress(self):
         def checker(item):
@@ -993,12 +999,12 @@ class Rubric:
     def grade(self):
         #return self.get_menu().prompt()
         MenuManager.get_menu_manager().add_menu(self.get_menu())
-    
+
     #Mark everything as not changed
     def save(self):
         self.changed = False
         self.total.save()
-    
+
     def is_changed(self):
         return self.changed or self.total.is_deep_changed()
 
@@ -1431,6 +1437,237 @@ class FileManager:
             confirmer = "Warning: Prefix %s already in use. Overwrite?")
             #, returner = lambda a, s: s, save_as = save_as)
 
+    def get_open_pdf_prefix(self, student = None):
+        return self.get_cond_file("PDF prefix to use: ", FileManager.PDF_KEY,\
+            exister = lambda a, s: '.',\
+            confirmer = "Warning: Prefix %s already in use. Overwrite?")
+
+#Class for managing email stuff
+class EmailManager:
+    def __init__(self, from_file = None, verbose = False):
+        def get_out():
+            raise ValueError("Canceled Email Setup")
+        def get_out_prompt(menu):
+            try:
+                menu.prompt()
+            except KeyboardInterrupt:
+                get_out()
+        ok = False
+        the_file = from_file
+        self.name = ""
+        self.email = ""
+        self.imap = ""
+        self.smtp = ""
+        self.sent_folder = "Sent"
+        self.verbose = verbose
+        self.imap_server = None
+        self.smtp_server = None
+        while not ok:
+            if from_file is None:
+                #Enter the info
+                #Name
+                self.name = seeded_input("Enter your name: ", self.name)
+                #Email address
+                self.email = seeded_input("Enter your email address: ", self.email)
+                #IMAP server
+                self.imap = seeded_input("IMAP server: ", self.imap)
+                #IMAP server authentication mode
+                cur_serv = "IMAP"
+                def set_auth(value):
+                    if cur_serv == "IMAP":
+                        self.imap_auth = value
+                    else:
+                        self.smtp_auth = value
+                auth_menu = Menu("Authentication Mode:", back = False)
+                for mode in ["None", "SSL", "STARTTLS"]:
+                    auth_menu.add_item(mode, set_auth, mode)
+                get_out_prompt(auth_menu)
+                #SMTP server
+                self.smtp = seeded_input("SMTP server: ", self.smtp)
+                #SMTP server authentication mode
+                cur_serv = "SMTP"
+                get_out_prompt(auth_menu)
+                #Sent folder
+                self.sent_folder = seeded_input("Name of Sent folder: ",\
+                    self.sent_folder)
+            else:
+                #Read from config file
+                with open(from_file, 'r') as fd:
+                    lines = fd.readlines()
+                    self.name = lines[0].strip()
+                    self.email = lines[1].strip()
+                    self.imap = lines[2].strip()
+                    self.imap_auth = lines[3].strip()
+                    self.smtp = lines[4].strip()
+                    self.smtp_auth = lines[5].strip()
+                    self.sent_folder = lines[6].strip()
+
+            #Verify all the info
+            ok = True
+            def not_ok():
+                nonlocal ok
+                nonlocal the_file
+                ok = False
+                the_file = None
+            print()
+            print("Name: %s"%self.name)
+            print("Email: %s"%self.email)
+            print("IMAP: %s, Auth = %s"%(self.imap, self.imap_auth))
+            print("SMTP: %s, Auth = %s\n"%(self.smtp, self.smtp_auth))
+            ok_menu = Menu("Everything look ok?", back = False)
+            ok_menu.add_item("Yes", lambda : None)
+            ok_menu.add_item("No", not_ok)
+            ok_menu.add_item("Cancel", get_out)
+            get_out_prompt(ok_menu)
+
+        ok = False
+        sent_changed = False
+        while not ok:
+            try:
+                if not sent_changed:
+                    self.password = getpass.getpass("Password for %s: "%self.email)
+                ok = True
+                sent_changed = False
+                #Try logging into IMAP server
+                try:
+                    self.imap_login()
+                    try:
+                        self.smtp_login()
+                    except:
+                        ok = False
+                        print_delay("\nError logging into SMTP server\n")
+                except ValueError:
+                    ok = False
+                    print_delay("\nInvalid Sent folder\n")
+                    self.sent_folder = seeded_input("Please enter new Sent folder: ",\
+                        self.sent_folder)
+                    sent_changed = True
+                except:
+                    ok = False
+                    print_delay("\nError logging into IMAP server\n")
+                print("\nLogin succesful!\n")
+            except KeyboardInterrupt:
+                get_out()
+
+    #Log into both servers
+    def login(self):
+        self.imap_login()
+        self.smtp_login()
+
+    #Log out from both servers
+    def logout(self):
+        self.imap_logout()
+        self.smtp_logout()
+
+    #Log into IMAP server
+    def imap_login(self):
+        if self.imap_server is not None:
+            # #Log out first if already logged in
+            # self.imap_logout()
+            #Do nothing
+            if self.verbose:
+                print("IMAP: Already logged in")
+            return
+        #Initialize/Authenticate
+        if self.imap_auth == 'SSL':
+            self.imap_server = imaplib.IMAP4_SSL(host=self.imap)
+        else:
+            self.imap_server = imaplib.IMAP4(host=self.imap)
+            if self.imap_auth == 'STARTTLS':
+                self.imap_server.starttls()
+        if self.verbose:
+            print("Logging into IMAP...")
+        #Log in to server
+        try:
+            self.imap_server.login(self.email, self.password)
+            if self.verbose:
+                print("Logged in!\n")
+            #Select the sent folder
+            sel = imap_server.select('"%s"'%self.sent_folder)
+            if sel[0] != 'OK':
+                raise ValueError("Invalid Sent folder: %s"%str(sel))
+            elif verbose:
+                print("Selected Sent folder: %s"%self.sent_folder)
+            val = sel[1][0]
+            self.message_count_init = int(val)
+            if verbose:
+                print("%d messages in %s\n"%(self.message_count_init, self.sent_folder))
+        except:
+            self.imap_server = None
+            raise
+
+    #Log into SMTP server
+    def smtp_login(self):
+        if self.smtp_server is not None:
+            # #Log out first if already logged in
+            # self.smtp_logout()
+            #Do nothing
+            if self.verbose:
+                print("SMTP: Already logged in")
+            return
+        #Initialize/Authenticate
+        if self.smtp_auth == 'SSL':
+            self.smtp_server = imaplib.SMTP_SSL(host=self.smtp)
+        else:
+            self.smtp_server = imaplib.SMTP(host=self.smtp)
+            if self.smtp_auth == 'STARTTLS':
+                self.smtp_server.starttls()
+        if self.verbose:
+            print("Logging into SMTP...")
+        #Log in to server
+        try:
+            self.smtp_server.login(self.email, self.password)
+            if self.verbose:
+                print("Logged in!\n")
+        except:
+            self.smtp_server = None
+            raise
+
+    #Log out from IMAP server
+    def imap_logout(self):
+        if self.imap_server is not None:
+            if self.verbose:
+                print("Logging out of IMAP server...")
+            self.imap_server.logout()
+            self.imap_server = None
+
+    #Log out from SMTP server
+    def smtp_logout(self):
+        if self.smtp_server is not None:
+            if self.verbose:
+                print("Logging out of SMTP server...")
+            self.smtp_server.quit()
+            self.smtp_server = None
+
+    #Send the email message
+    #Store a copy in the sent folder
+    def send_message(self, email):
+        #IMAP stuff
+        #Copy the message
+        date = imaplib.Time2Internaldate(time.time())
+        app = imap_server.append('"%s"'%self.sent_folder, None, date, bytes(email))
+        if app[0] != 'OK':
+            raise ValueError("Copying to %s failed: %s"%(self.sent_folder, str(app)))
+        if verbose:
+            print("Message copied to %s"%self.sent_folder)
+        #Mark it as read
+        srch = imap_server.search(None, '(UNSEEN)')
+        if srch[0] != 'OK':
+            raise(ValueError("Search for unread messages failed: %s"%str(srch)))
+        for msg in srch[1]:
+            if int(msg) >= self.message_count_init:
+                stor = imap_server.store(msg, '+FLAGS', '\\Seen')
+                if stor[0] != 'OK':
+                    raise(ValueError("Failed to mark message as read: %s"%str(stor)))
+            elif verbose:
+                print(int(msg), b_search)
+                print("Message marked as read")
+
+        #SMTP stuff
+        self.smtp_server.send_message(email)
+        if self.verbose:
+            print("Message sent!")
+
 def print_delay(stuff):
     print(stuff)
     input("Press [ENTER] to continue...")
@@ -1645,12 +1882,37 @@ if __name__ == '__main__':
         pdf_menu.prompt()
     main_menu.add_item("Export PDFs", prompt_pdf, False)
     main_menu.add_item("Export PDFs as", prompt_pdf, True)
+
+    email_manager = None
     if roster.get_a_student(all = True).has_email():
+        manager_setup_menu = Menu("How to get email data?", menued = False)
+        email_config_file = False
+        def set_email_config_file(val):
+            global email_config_file
+            if val == True:
+                email_config_file = input("Enter email config file: ")
+            elif val == 0:
+                email_config_file = None
+            else:
+                email_config_file = val
+        manager_setup_menu.add_item("Enter manually", set_email_config_file, 0)
+        manager_setup_menu.add_item("From config file", set_email_config_file, True)
         #Supports email
         def email():
-            prefix = file_manager.get_pdf_prefix()
-            roster.email(prefix)
+            if email_manager is None:
+                manager_setup_menu.prompt()
+                email_manager = EmailManager(from_file = email_config_file,\
+                    verbose = verbose)
+            prefix = file_manager.get_open_pdf_prefix()
+            roster.email(prefix, email_manager)
         main_menu.add_item("Email PDFs", email)
 
     menu_manager.add_menu(main_menu)
-    menu_manager.mainloop()
+    try:
+        menu_manager.mainloop()
+    except KeyboardInterrupt:
+        #do cleanup
+        if email_manager is not None:
+            email_manager.logout()
+        print("Interrupted")
+        sys.exit(1)
