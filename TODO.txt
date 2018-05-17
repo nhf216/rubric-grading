@@ -2,5 +2,4 @@ parse newlines in input fields (eval('"%s"'%strg))
 convert to new string formatting
 long tables
 view PDF
-
-test with other test cases
+Gmail/Microsoft options

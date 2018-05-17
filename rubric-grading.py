@@ -50,8 +50,14 @@ RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '&'
 TEX_FONT_SIZE = 12
 
 def seeded_input(msg, text):
-    readline.add_history(text)
-    readline.set_startup_hook(lambda: readline.insert_text(text))
+    if sys.platform == 'darwin':
+        #Mac
+        #Make it so can hit up-arrow to get last value
+        readline.add_history(text)
+    else:
+        #Non-Mac
+        #Literally make it last value
+        readline.set_startup_hook(lambda: readline.insert_text(text))
     try:
         return input(msg)
     finally:
@@ -76,7 +82,7 @@ def print_email(email_msg):
     print(email_msg.get_body())
     print()
     for att in email_msg.iter_attachments():
-        print("Attachment, type=%s, filename=%s"%(att.get_content_type(),\
+        print("Attachment [type=%s, filename=%s]"%(att.get_content_type(),\
             att.get_filename()))
     print()
 
@@ -103,17 +109,21 @@ class Group:
 class FrozenGroup(GradedEntity):
     def __init__(self, group):
         self.number = group.number
-        self.students = frozenset(group.students)
+        self.students = tuple(sorted(group.students, key = lambda s: s.lname +\
+            ' ' + s.fname)]))
+        self.student_set = frozenset(group.students)
 
     def __str__(self):
-        #return "Group %d (%s)"%(self.number, ', '.join([str(s) for s in self.students]))
-        return "Group %d (%s)"%(self.number, ', '.join([str(st) for st in sorted(self.students, key = lambda s: s.lname + ' ' + s.fname)]))
+        return "Group %d (%s)"%(self.number, ', '.join([str(s) for s in\
+            self.students]))
+        #return "Group %d (%s)"%(self.number, ', '.join([str(st) for st in\
+        #    sorted(self.students, key = lambda s: s.lname + ' ' + s.fname)]))
 
     def __iter__(self):
         return iter(self.students)
 
     def __contains__(self, student):
-        return student in self.students
+        return student in self.student_set
 
 
 #Class representing a student
@@ -1708,8 +1718,7 @@ class EmailManager:
 
         #SMTP stuff
         self.smtp_server.send_message(email_msg)
-        if self.verbose:
-            print("Message sent")
+        print("Message sent")
 
 def print_delay(stuff):
     print(stuff)
