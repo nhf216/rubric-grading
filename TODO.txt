@@ -1,4 +1,5 @@
 email stuff
+parse newlines in input fields (eval('"%s"'%strg))
 convert to new string formatting
 
 test with other test cases

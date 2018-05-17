@@ -111,24 +111,24 @@ class Student(GradedEntity):
         self.email = email
 
     def __str__(self):
-        if self.email is None:
-            return "%s %s"%(self.fname, self.lname)
-        else:
-            return "%s %s %s"%(self.fname, self.lname, self.email)
+        #if self.email is None:
+        return "%s %s"%(self.fname, self.lname)
+        #else:
+        #    return "%s %s %s"%(self.fname, self.lname, self.email)
 
     #Does this student have an email address?
     def has_email(self):
         return self.email is not None
 
 #Convert a student and a prefix into a .tex name
-def make_file_name(prefix, student, extention):
+def make_file_name(prefix, student, extension):
     return "%s_%s_%s.%s"%(prefix, student.lname, student.fname, extension)
 
 def make_tex_name(prefix, student):
-    return make_file_name(prefix, student, '.tex')
+    return make_file_name(prefix, student, 'tex')
 
 def make_pdf_name(prefix, student):
-    return make_file_name(prefix, student, '.pdf')
+    return make_file_name(prefix, student, 'pdf')
 
 #Helpers for splittable
 def in_char_range(char, a, b):
@@ -173,7 +173,7 @@ class EmailTemplate:
         email['Subject'] = self.subject
         email['From'] = "%s <%s>"%(self.from_name, self.from_email)
         email['To'] = "%s %s <%s>"%(student.fname, student.lname, student.email)
-        pdf_name = make_pdf_name(self.pdf_prefix student)
+        pdf_name = make_pdf_name(self.pdf_prefix, student)
         file_name = pdf_name[pdf_name.rfind(os.sep)+1:]
         with open(pdf_name, 'rb') as att:
             att_data = att.read()
@@ -474,7 +474,7 @@ class Roster:
         email_template = EmailTemplate(message = body, closing = closing,\
             subject = subject, my_email = email_manager.get_email(),\
             my_name = email_manager.get_name(), greeting = greeting,\
-            pdf_prefix = pdf_prefix))
+            pdf_prefix = pdf_prefix)
         send_ok = True
         new_body = False
         previewed = False
@@ -1921,6 +1921,7 @@ if __name__ == '__main__':
         manager_setup_menu.add_item("From config file", set_email_config_file, True)
         #Supports email
         def email():
+            global email_manager
             if email_manager is None:
                 manager_setup_menu.prompt()
                 email_manager = EmailManager(from_file = email_config_file,\
