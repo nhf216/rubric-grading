@@ -50,6 +50,7 @@ RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '&'
 TEX_FONT_SIZE = 12
 
 def seeded_input(msg, text):
+    readline.add_history(text)
     readline.set_startup_hook(lambda: readline.insert_text(text))
     try:
         return input(msg)
@@ -65,6 +66,19 @@ def is_number(strg):
         except:
             return False
     return True
+
+#Print an email message
+def print_email(email_msg):
+    print()
+    for header in email_msg.items():
+        print("%s: %s"%(header[0], header[1]))
+    print()
+    print(email_msg.get_body())
+    print()
+    for att in email_msg.iter_attachments():
+        print("Attachment, type=%s, filename=%s"%(att.get_content_type(),\
+            att.get_filename()))
+    print()
 
 #Class representing an entity that can be graded (student or group)
 class GradedEntity:
@@ -168,11 +182,11 @@ class EmailTemplate:
         # the_directory = dirc
         # if the_directory[-1] != os.sep:
         #     the_directory += os.sep
-        email = email.message.EmailMessage()
-        email.set_content("%s\n\n\t%s\n\n%s"%(self.greeting%student.fname, body, self.closing))
-        email['Subject'] = self.subject
-        email['From'] = "%s <%s>"%(self.from_name, self.from_email)
-        email['To'] = "%s %s <%s>"%(student.fname, student.lname, student.email)
+        email_msg = email.message.EmailMessage()
+        email_msg.set_content("%s\n\n\t%s\n\n%s"%(self.greeting%student.fname, body, self.closing))
+        email_msg['Subject'] = self.subject
+        email_msg['From'] = "%s <%s>"%(self.from_name, self.from_email)
+        email_msg['To'] = "%s %s <%s>"%(student.fname, student.lname, student.email)
         pdf_name = make_pdf_name(self.pdf_prefix, student)
         file_name = pdf_name[pdf_name.rfind(os.sep)+1:]
         with open(pdf_name, 'rb') as att:
@@ -183,8 +197,8 @@ class EmailTemplate:
             # use a generic bag-of-bits type.
             ctype = 'application/octet-stream'
         maintype, subtype = ctype.split('/', 1)
-        email.add_attachment(att_data, maintype=maintype, subtype=subtype, filename=file_name)
-        return email
+        email_msg.add_attachment(att_data, maintype=maintype, subtype=subtype, filename=file_name)
+        return email_msg
 
 #Class representing all the graded entities in the class
 class Roster:
@@ -445,7 +459,7 @@ class Roster:
         print("All .pdf files compiled successfully\n")
 
     #Send emails to students
-    def email(self, pdf_prefix, email_manager):
+    def email_students(self, pdf_prefix, email_manager):
         #Prepare subject
         subject = input("Email subject: ")
         #Prepare greeting
@@ -488,7 +502,7 @@ class Roster:
         def preview_pdf():
             nonlocal previewed
             previewed = True
-            print("PDF preview not currently supported")
+            print_delay("PDF preview not currently supported")
         email_edit_menu = Menu("Action", back = False)
         email_edit_menu.add_item("Looks good!", lambda : None)
         email_edit_menu.add_item("Don't send!", send_not_ok)
@@ -503,18 +517,18 @@ class Roster:
                 while True:
                     #Prep email
                     if not previewed:
-                        email = email_template.render(student, message = body)
+                        email_msg = email_template.render(student, message = body)
                     #Offer to edit
                     new_body = False
                     previewed = False
-                    print(email)
+                    print_email(email_msg)
                     #Proof
                     email_edit_menu.prompt()
                     if not new_body and not previewed:
                         break
                 #Send
                 if send_ok:
-                    email_manager.send_message(email)
+                    email_manager.send_message(email_msg)
         #Log out of email_manager
         email_manager.logout()
 
@@ -1456,11 +1470,16 @@ class FileManager:
             exister = lambda a, s: '.',\
             confirmer = "Warning: Prefix %s already in use. Overwrite?")
 
+#Class for error for exiting email early
+class EmailManagerCanceled(Exception):
+    def __init__(self, msg):
+        super().__init__(msg)
+
 #Class for managing email stuff
 class EmailManager:
     def __init__(self, from_file = None, verbose = False):
         def get_out():
-            raise ValueError("Canceled Email Setup")
+            raise EmailManagerCanceled("Canceled Email Setup")
         def get_out_prompt(menu):
             try:
                 menu.prompt()
@@ -1527,7 +1546,9 @@ class EmailManager:
             print("Name: %s"%self.name)
             print("Email: %s"%self.email)
             print("IMAP: %s, Auth = %s"%(self.imap, self.imap_auth))
-            print("SMTP: %s, Auth = %s\n"%(self.smtp, self.smtp_auth))
+            print("SMTP: %s, Auth = %s"%(self.smtp, self.smtp_auth))
+            print("Sent folder: %s"%self.sent_folder)
+            print()
             ok_menu = Menu("Everything look ok?", back = False)
             ok_menu.add_item("Yes", lambda : None)
             ok_menu.add_item("No", not_ok)
@@ -1547,19 +1568,19 @@ class EmailManager:
                     self.imap_login()
                     try:
                         self.smtp_login()
-                    except:
+                    except smtplib.SMTPException:
                         ok = False
                         print_delay("\nError logging into SMTP server\n")
+                    print("\nLogin succesful!\n")
                 except ValueError:
                     ok = False
                     print_delay("\nInvalid Sent folder\n")
                     self.sent_folder = seeded_input("Please enter new Sent folder: ",\
                         self.sent_folder)
                     sent_changed = True
-                except:
+                except imaplib.IMAP4.error:
                     ok = False
                     print_delay("\nError logging into IMAP server\n")
-                print("\nLogin succesful!\n")
             except KeyboardInterrupt:
                 get_out()
 
@@ -1605,7 +1626,7 @@ class EmailManager:
             if self.verbose:
                 print("Logged in!\n")
             #Select the sent folder
-            sel = imap_server.select('"%s"'%self.sent_folder)
+            sel = self.imap_server.select('"%s"'%self.sent_folder)
             if sel[0] != 'OK':
                 raise ValueError("Invalid Sent folder: %s"%str(sel))
             elif verbose:
@@ -1629,9 +1650,9 @@ class EmailManager:
             return
         #Initialize/Authenticate
         if self.smtp_auth == 'SSL':
-            self.smtp_server = imaplib.SMTP_SSL(host=self.smtp)
+            self.smtp_server = smtplib.SMTP_SSL(host=self.smtp)
         else:
-            self.smtp_server = imaplib.SMTP(host=self.smtp)
+            self.smtp_server = smtplib.SMTP(host=self.smtp)
             if self.smtp_auth == 'STARTTLS':
                 self.smtp_server.starttls()
         if self.verbose:
@@ -1663,22 +1684,22 @@ class EmailManager:
 
     #Send the email message
     #Store a copy in the sent folder
-    def send_message(self, email):
+    def send_message(self, email_msg):
         #IMAP stuff
         #Copy the message
         date = imaplib.Time2Internaldate(time.time())
-        app = imap_server.append('"%s"'%self.sent_folder, None, date, bytes(email))
+        app = self.imap_server.append('"%s"'%self.sent_folder, None, date, bytes(email_msg))
         if app[0] != 'OK':
             raise ValueError("Copying to %s failed: %s"%(self.sent_folder, str(app)))
         if verbose:
             print("Message copied to %s"%self.sent_folder)
         #Mark it as read
-        srch = imap_server.search(None, '(UNSEEN)')
+        srch = self.imap_server.search(None, '(UNSEEN)')
         if srch[0] != 'OK':
             raise(ValueError("Search for unread messages failed: %s"%str(srch)))
         for msg in srch[1]:
             if int(msg) >= self.message_count_init:
-                stor = imap_server.store(msg, '+FLAGS', '\\Seen')
+                stor = self.imap_server.store(msg, '+FLAGS', '\\Seen')
                 if stor[0] != 'OK':
                     raise(ValueError("Failed to mark message as read: %s"%str(stor)))
             elif verbose:
@@ -1686,7 +1707,7 @@ class EmailManager:
                 print("Message marked as read")
 
         #SMTP stuff
-        self.smtp_server.send_message(email)
+        self.smtp_server.send_message(email_msg)
         if self.verbose:
             print("Message sent")
 
@@ -1920,22 +1941,25 @@ if __name__ == '__main__':
         manager_setup_menu.add_item("Enter manually", set_email_config_file, 0)
         manager_setup_menu.add_item("From config file", set_email_config_file, True)
         #Supports email
-        def email():
+        def email_students():
             global email_manager
-            if email_manager is None:
-                manager_setup_menu.prompt()
-                email_manager = EmailManager(from_file = email_config_file,\
-                    verbose = verbose)
-            prefix = file_manager.get_open_pdf_prefix()
-            roster.email(prefix, email_manager)
-        main_menu.add_item("Email PDFs", email)
+            try:
+                if email_manager is None:
+                    manager_setup_menu.prompt()
+                    email_manager = EmailManager(from_file = email_config_file,\
+                        verbose = verbose)
+                prefix = file_manager.get_open_pdf_prefix()
+                roster.email_students(prefix, email_manager)
+            except EmailManagerCanceled:
+                print("\nEmail Setup Canceled")
+        main_menu.add_item("Email PDFs", email_students)
 
     menu_manager.add_menu(main_menu)
     try:
         menu_manager.mainloop()
-    except KeyboardInterrupt:
+    except:
         #do cleanup
         if email_manager is not None:
             email_manager.logout()
-        print("Interrupted")
-        sys.exit(1)
+        #print("Interrupted")
+        raise
