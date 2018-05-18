@@ -4,6 +4,7 @@ import re
 import readline
 import collections
 import subprocess
+import webbrowser
 
 import email.message
 import imaplib
@@ -62,6 +63,10 @@ def seeded_input(msg, text):
         return input(msg)
     finally:
         readline.set_startup_hook()
+
+#Process a string to, in particular, replace \\n with \n
+def unquote(strg):
+    return eval('"%s"'%strg)
 
 def is_number(strg):
     try:
@@ -455,7 +460,8 @@ class Roster:
             #Remove any old file, if it exists
             if os.path.isfile(dirc + os.sep + fname):
                 os.remove(dirc + os.sep + fname)
-            args_tex = ['pdflatex', '-output-directory=%s'%dirc, '-halt-on-error', tex_file]
+            args_tex = ['pdflatex', '-output-directory=%s'%dirc,\
+                '-halt-on-error','-interaction=nonstopmode', tex_file]
             if verbose:
                 subprocess.run(args_tex)
             else:
@@ -473,7 +479,8 @@ class Roster:
         #Prepare subject
         subject = input("Email subject: ")
         #Prepare greeting
-        greeting = seeded_input("Email greeting (use %s for student name): ", "Dear %s,")
+        greeting = unquote(seeded_input("Email greeting (use %s for student name): ",\
+            "Dear %s,"))
         #Prepare email body
         print("Email body (to break lines, end with \\):")
         body = ""
@@ -484,6 +491,7 @@ class Roster:
                 body = body[:-1]
             else:
                 break
+        body = unquote(body)
         #Prepare closing
         print("Email closing (e.g. your name):")
         closing = ""
@@ -494,6 +502,7 @@ class Roster:
                 closing = closing[:-1]
             else:
                 break
+        closing = unquote(closing)
         #Set the template
         email_template = EmailTemplate(message = body, closing = closing,\
             subject = subject, my_email = email_manager.get_email(),\
@@ -502,6 +511,7 @@ class Roster:
         send_ok = True
         new_body = False
         previewed = False
+        fname = None
         def send_not_ok():
             nonlocal send_ok
             send_ok = False
@@ -511,8 +521,13 @@ class Roster:
             new_body = True
         def preview_pdf():
             nonlocal previewed
+            nonlocal fname
             previewed = True
-            print_delay("PDF preview not currently supported")
+            the_fname = fname
+            if the_fname[0] == '.':
+                the_fname = os.getcwd() + the_fname[1:]
+            webbrowser.open_new(r'file://%s'%the_fname)
+            print_delay("")
         email_edit_menu = Menu("Action", back = False)
         email_edit_menu.add_item("Looks good!", lambda : None)
         email_edit_menu.add_item("Don't send!", send_not_ok)
@@ -522,7 +537,8 @@ class Roster:
         email_manager.login()
         #Go through students
         for student in self.get_students():
-            if os.path.isfile(make_pdf_name(pdf_prefix, student)):
+            fname = make_pdf_name(pdf_prefix, student)
+            if os.path.isfile(fname):
                 send_ok = True
                 while True:
                     #Prep email
@@ -1487,7 +1503,12 @@ class EmailManagerCanceled(Exception):
 
 #Class for managing email stuff
 class EmailManager:
-    def __init__(self, from_file = None, verbose = False):
+    known_modes = dict(
+        'Gmail':['imap.gmail.com', 'SSL', 'smtp.gmail.com', 'SSL', 'Sent'],
+        'Microsoft':['outlook.office365.com', 'SSL', 'smtp.office365.com',\
+            'STARTTLS', 'Sent Items']
+    )
+    def __init__(self, from_file = None, special_mode = None, verbose = False):
         def get_out():
             raise EmailManagerCanceled("Canceled Email Setup")
         def get_out_prompt(menu):
@@ -1506,44 +1527,57 @@ class EmailManager:
         self.imap_server = None
         self.smtp_server = None
         while not ok:
-            if from_file is None:
+            if the_file is None:
                 #Enter the info
                 #Name
                 self.name = seeded_input("Enter your name: ", self.name)
                 #Email address
                 self.email = seeded_input("Enter your email address: ", self.email)
-                #IMAP server
-                self.imap = seeded_input("IMAP server: ", self.imap)
-                #IMAP server authentication mode
-                cur_serv = "IMAP"
-                def set_auth(value):
-                    if cur_serv == "IMAP":
-                        self.imap_auth = value
-                    else:
-                        self.smtp_auth = value
-                auth_menu = Menu("Authentication Mode:", back = False)
-                for mode in ["None", "SSL", "STARTTLS"]:
-                    auth_menu.add_item(mode, set_auth, mode)
-                get_out_prompt(auth_menu)
-                #SMTP server
-                self.smtp = seeded_input("SMTP server: ", self.smtp)
-                #SMTP server authentication mode
-                cur_serv = "SMTP"
-                get_out_prompt(auth_menu)
-                #Sent folder
-                self.sent_folder = seeded_input("Name of Sent folder: ",\
-                    self.sent_folder)
+                if special_mode in EmailManager.known_modes:
+                    #Gmail or Microsoft
+                    self.imap = EmailManager.known_modes[special_mode][0]
+                    self.imap_auth = EmailManager.known_modes[special_mode][1]
+                    self.smtp = EmailManager.known_modes[special_mode][2]
+                    self.smtp_auth = EmailManager.known_modes[special_mode][3]
+                    self.sent_folder = EmailManager.known_modes[special_mode][4]
+                else:
+                    #IMAP server
+                    self.imap = seeded_input("IMAP server: ", self.imap)
+                    #IMAP server authentication mode
+                    cur_serv = "IMAP"
+                    def set_auth(value):
+                        if cur_serv == "IMAP":
+                            self.imap_auth = value
+                        else:
+                            self.smtp_auth = value
+                    auth_menu = Menu("Authentication Mode:", back = False)
+                    for mode in ["None", "SSL", "STARTTLS"]:
+                        auth_menu.add_item(mode, set_auth, mode)
+                    get_out_prompt(auth_menu)
+                    #SMTP server
+                    self.smtp = seeded_input("SMTP server: ", self.smtp)
+                    #SMTP server authentication mode
+                    cur_serv = "SMTP"
+                    get_out_prompt(auth_menu)
+                    #Sent folder
+                    self.sent_folder = seeded_input("Name of Sent folder: ",\
+                        self.sent_folder)
             else:
                 #Read from config file
                 with open(from_file, 'r') as fd:
                     lines = fd.readlines()
-                    self.name = lines[0].strip()
-                    self.email = lines[1].strip()
-                    self.imap = lines[2].strip()
-                    self.imap_auth = lines[3].strip()
-                    self.smtp = lines[4].strip()
-                    self.smtp_auth = lines[5].strip()
-                    self.sent_folder = lines[6].strip()
+                    if lines[0].strip in EmailManager.known_modes:
+                        #First line is Gmail or Microsoft
+                        self.name = lines[1].strip()
+                        self.email = lines[2].strip()
+                    else:
+                        self.name = lines[0].strip()
+                        self.email = lines[1].strip()
+                        self.imap = lines[2].strip()
+                        self.imap_auth = lines[3].strip()
+                        self.smtp = lines[4].strip()
+                        self.smtp_auth = lines[5].strip()
+                        self.sent_folder = lines[6].strip()
 
             #Verify all the info
             ok = True
@@ -1939,16 +1973,23 @@ if __name__ == '__main__':
     if roster.get_a_student(all = True).has_email():
         manager_setup_menu = Menu("How to get email data?", menued = False)
         email_config_file = False
+        email_mode = None
         def set_email_config_file(val):
             global email_config_file
+            global email_mode
             if val == True:
                 email_config_file = input("Enter email config file: ")
-            elif val == 0:
-                email_config_file = None
             else:
-                email_config_file = val
+                email_config_file = None
+                if isinstance(val, str):
+                    email_mode = val
         manager_setup_menu.add_item("Enter manually", set_email_config_file, 0)
-        manager_setup_menu.add_item("From config file", set_email_config_file, True)
+        manager_setup_menu.add_item("From config file", set_email_config_file,\
+            True)
+        manager_setup_menu.add_item("Manual Gmail", set_email_config_file,\
+            'Gmail')
+        manager_setup_menu.add_item("Manual Microsoft", set_email_config_file,\
+            'Microsoft')
         #Supports email
         def email_students():
             global email_manager
@@ -1956,7 +1997,7 @@ if __name__ == '__main__':
                 if email_manager is None:
                     manager_setup_menu.prompt()
                     email_manager = EmailManager(from_file = email_config_file,\
-                        verbose = verbose)
+                        verbose = verbose, special_mode = email_mode)
                 prefix = file_manager.get_open_pdf_prefix()
                 roster.email_students(prefix, email_manager)
             except EmailManagerCanceled:
