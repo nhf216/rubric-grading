@@ -48,6 +48,8 @@ ROSTER_SAVE_SYMBOL = '?'
 RUBRIC_SAVE_SEPARATOR = ':'
 RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '&'
 
+EMAIL_CONFIG_COMMENT = '#'
+
 TEX_FONT_SIZE = 12
 
 def seeded_input(msg, text):
@@ -1565,19 +1567,24 @@ class EmailManager:
             else:
                 #Read from config file
                 with open(from_file, 'r') as fd:
-                    lines = fd.readlines()
-                    if lines[0].strip in EmailManager.known_modes:
+                    lines = []
+                    for line in fd:
+                        lstrip = line.strip()
+                        if len(lstrip) > 0 and lstrip[0] != EMAIL_CONFIG_COMMENT:
+                            lines.append(lstrip)
+
+                    if lines[0] in EmailManager.known_modes:
                         #First line is Gmail or Microsoft
-                        self.name = lines[1].strip()
-                        self.email = lines[2].strip()
+                        self.name = lines[1]
+                        self.email = lines[2]
                     else:
-                        self.name = lines[0].strip()
-                        self.email = lines[1].strip()
-                        self.imap = lines[2].strip()
-                        self.imap_auth = lines[3].strip()
-                        self.smtp = lines[4].strip()
-                        self.smtp_auth = lines[5].strip()
-                        self.sent_folder = lines[6].strip()
+                        self.name = lines[0]
+                        self.email = lines[1]
+                        self.imap = lines[2]
+                        self.imap_auth = lines[3]
+                        self.smtp = lines[4]
+                        self.smtp_auth = lines[5]
+                        self.sent_folder = lines[6]
 
             #Verify all the info
             ok = True
@@ -1627,6 +1634,33 @@ class EmailManager:
                     print_delay("\nError logging into IMAP server\n")
             except KeyboardInterrupt:
                 get_out()
+
+        if the_file is None:
+            save_config_menu = Menu("Would you like to save these settings in a config file?",\
+                back = False)
+            def save_email_config(the_fname = None):
+                fname = the_fname
+                if fname is None:
+                    fname = input("Filename to save config file: ")
+                    if os.path.isfile(fname):
+                        overwrite_warning_menu = Menu("Warning: file %s already exists. Overwrite?"\
+                            %fname, back = False)
+                        overwrite_warning_menu.add_item("Enter New Name", save_email_config)
+                        overwrite_warning_menu.add_item("Overwrite", save_email_config, fname)
+                        overwrite_warning_menu.add_item("Cancel", lambda : None)
+                        overwrite_warning_menu.prompt()
+                        raise EmailManagerCanceled("Entered existing filename")
+                with open(fname, 'w') as cfd:
+                    for item in [self.name, self.email, self.imap,\
+                            self.imap_auth, self.smtp, self.smtp_auth,\
+                            self.sent_folder]:
+                        cfd.write("%s\n"%item)
+            save_config_menu.add_item("No", lambda : None)
+            save_config_menu.add_item("Yes", save_email_config)
+            try:
+                save_config_menu.prompt()
+            except EmailManagerCanceled:
+                pass
 
     #Get your name
     def get_name(self):
