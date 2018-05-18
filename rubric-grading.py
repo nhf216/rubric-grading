@@ -117,7 +117,7 @@ class FrozenGroup(GradedEntity):
     def __init__(self, group):
         self.number = group.number
         self.students = tuple(sorted(group.students, key = lambda s: s.lname +\
-            ' ' + s.fname)]))
+            ' ' + s.fname))
         self.student_set = frozenset(group.students)
 
     def __str__(self):
@@ -430,6 +430,7 @@ class Roster:
                     fd.write("\\documentclass[%dpt]{article}\n"%TEX_FONT_SIZE)
                     fd.write("\\usepackage{fullpage}\n")
                     fd.write("\\usepackage[none]{hyphenat}\n")
+                    fd.write("\\usepackage{array}\n")
                     fd.write("\\begin{document}\n\\noindent ")
                     if self.is_using_groups():
                         group = self.get_group(student)
@@ -442,7 +443,7 @@ class Roster:
                     else:
                         fd.write("\\textbf{%s %s}\\\\\n"%(student.fname, student.lname))
                         fd.write(rubric.get_front_matter_tex())
-                    fd.write("\n\\noindent\\begin{tabular}{|p{1.7in}|l|l|p{2.8in}|}\\hline\n")
+                    fd.write("\n\\noindent\\begin{tabular}{|>{\\raggedright}p{1.7in}|l|l|>{\\raggedright\\arraybackslash}p{2.8in}|}\\hline\n")
                     fd.write("&\\textbf{TOTAL}&\\textbf{POINTS}&\\textbf{COMMENTS}\\\\\\hline\n")
                     fd.write(rubric.get_tex())
                     fd.write("\\end{tabular}\n")
@@ -525,10 +526,7 @@ class Roster:
             nonlocal previewed
             nonlocal fname
             previewed = True
-            the_fname = fname
-            if the_fname[0] == '.':
-                the_fname = os.getcwd() + the_fname[1:]
-            webbrowser.open_new(r'file://%s'%the_fname)
+            webbrowser.open_new(r'file://%s'%os.path.abspath(fname))
             print_delay("")
         email_edit_menu = Menu("Action", back = False)
         email_edit_menu.add_item("Looks good!", lambda : None)
@@ -1505,11 +1503,11 @@ class EmailManagerCanceled(Exception):
 
 #Class for managing email stuff
 class EmailManager:
-    known_modes = dict(
+    known_modes = {
         'Gmail':['imap.gmail.com', 'SSL', 'smtp.gmail.com', 'SSL', 'Sent'],
         'Microsoft':['outlook.office365.com', 'SSL', 'smtp.office365.com',\
             'STARTTLS', 'Sent Items']
-    )
+    }
     def __init__(self, from_file = None, special_mode = None, verbose = False):
         def get_out():
             raise EmailManagerCanceled("Canceled Email Setup")
