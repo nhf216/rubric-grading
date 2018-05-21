@@ -2,4 +2,4 @@
 
 Dependencies:
 -Python 3.6
--LaTeX (full install, including hyphenat and fullpage packages)
+-LaTeX (full install, including packages hyphenat, fullpage, longtable, array)

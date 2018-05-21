@@ -431,6 +431,7 @@ class Roster:
                     fd.write("\\usepackage{fullpage}\n")
                     fd.write("\\usepackage[none]{hyphenat}\n")
                     fd.write("\\usepackage{array}\n")
+                    fd.write("\\usepackage{longtable}\n")
                     fd.write("\\begin{document}\n\\noindent ")
                     if self.is_using_groups():
                         group = self.get_group(student)
@@ -443,10 +444,10 @@ class Roster:
                     else:
                         fd.write("\\textbf{%s %s}\\\\\n"%(student.fname, student.lname))
                         fd.write(rubric.get_front_matter_tex())
-                    fd.write("\n\\noindent\\begin{tabular}{|>{\\raggedright}p{1.7in}|l|l|>{\\raggedright\\arraybackslash}p{2.8in}|}\\hline\n")
-                    fd.write("&\\textbf{TOTAL}&\\textbf{POINTS}&\\textbf{COMMENTS}\\\\\\hline\n")
+                    fd.write("\n\\noindent\\begin{longtable}{|>{\\raggedright}p{1.7in}|l|l|>{\\raggedright\\arraybackslash}p{2.8in}|}\\hline\n")
+                    fd.write("&\\textbf{TOTAL}&\\textbf{POINTS}&\\textbf{COMMENTS}\\\\\\hline\n\\endhead\n")
                     fd.write(rubric.get_tex())
-                    fd.write("\\end{tabular}\n")
+                    fd.write("\\end{longtable}\n")
                     fd.write("\\end{document}")
                 except:
                     fd.close()
@@ -998,10 +999,11 @@ class Rubric:
             fm_text = self.frontmatter_dict[label]
             if fm_text is None:
                 fm_text = ""
-            val = seeded_input("Enter value for \"%s\", or 0 to cancel: "\
-                %label, fm_text)
-            if val == '0':
-                print("Canceled")
+            try:
+                val = seeded_input("Enter value for \"%s\", or CTRL+C to cancel: "\
+                    %label, fm_text)
+            except KeyboardInterrupt:
+                print("\nCanceled\n")
                 return
             else:
                 saved = False
@@ -1021,10 +1023,11 @@ class Rubric:
             self.auto_comment_menu = Menu("Select category to add comment to:", menued = False)
             def auto_comment(item):
                 old_comment = item.get_comment()
-                comment = seeded_input("Enter comment for %s, or 0 to cancel: "\
-                %item.get_name(), old_comment)
-                if comment == '0':
-                    print("Canceled")
+                try:
+                    comment = seeded_input("Enter comment for %s, or CTRL+C to cancel: "\
+                        %item.get_name(), old_comment)
+                except KeyboardInterrupt:
+                    print("\nCanceled")
                     return
                 self.changed = True
                 item.set_comment(comment)
@@ -1323,7 +1326,7 @@ class Menu:
 
 def assign_grade(item):
     print("Grading %s, out of %d"%(item.get_name(), item.get_value()))
-    msg = "Enter grade, blank to clear, or a non-number to cancel: "
+    msg = "Enter grade, blank to clear, or CTRL+C to cancel: "
     try:
         old_grade = item.get_score()
         if old_grade is None:
@@ -1339,10 +1342,11 @@ def assign_grade(item):
             else:
                 grade = int(grade)
             item.set_score(grade)
-            print(item.is_changed())
+            #print(item.is_changed())
+    except KeyboardInterrupt:
+        print("\nCanceled")
     except ValueError:
-        print("Canceled")
-        pass
+        print("\nError: Cannot parse grade. Canceling...")
 
 def assign_comment(item):
     score = item.get_score()
@@ -1355,17 +1359,14 @@ def assign_comment(item):
                 score, item.get_value()))
     else:
         print("Comment for %s, score TBD"%item.get_name())
-    msg = "Please enter comment, or 0 to cancel: "
+    msg = "Please enter comment, or CTRL+C to cancel: "
     old_comment = item.get_comment()
-    comment = seeded_input(msg, old_comment)
-    if comment == '0':
-        print("Canceled")
-    else:
-        item.set_comment(comment)
-
-def function_sequencer(funcs, *args):
-    for func in funcs:
-        func(*args)
+    try:
+        comment = seeded_input(msg, old_comment)
+    except KeyboardInterrupt:
+        print("\nCanceled")
+        return
+    item.set_comment(comment)
 
 class ChangingText:
     def __init__(self, text1, text2, conditional, *args):
@@ -1410,8 +1411,11 @@ class EditMenu(Menu):
         # if grade_item.get_comment() != "":
         #     comment_str = "Update Comment"
         # self.add_item(comment_str, assign_comment, grade_item)
-        self.add_item("Both", function_sequencer,\
-            [assign_grade, assign_comment], grade_item)
+        def grade_and_comment(itm):
+            assign_grade(itm)
+            if itm.get_score() is not None:
+                assign_comment(itm)
+        self.add_item("Both", grade_and_comment, grade_item)
 
 class MenuManager:
     manager = None
@@ -1858,7 +1862,10 @@ if __name__ == '__main__':
     #Stuff for saving when exiting
     file_manager = FileManager(out_dir)
     def save(save_as=False):
-        fil = file_manager.get_save_file(save_as)
+        try:
+            fil = file_manager.get_save_file(save_as)
+        except KeyboardInterrupt:
+            fil = None
         if fil is not None:
             roster.save(fil)
             return True
@@ -1974,7 +1981,10 @@ if __name__ == '__main__':
 
     #Export CSV
     def export_csv(save_as):
-        fil = file_manager.get_export_file(save_as)
+        try:
+            fil = file_manager.get_export_file(save_as)
+        except KeyboardInterrupt:
+            fil = None
         if fil is not None:
             roster.export_csv(fil)
     main_menu.add_item("Export CSV", export_csv, False)
@@ -1986,9 +1996,12 @@ if __name__ == '__main__':
     pdf_flag_list = ["Completed", "In Progress", "All"]
     pdf_save_as = False
     def export_pdf(flag):
-        fil = file_manager.get_pdf_prefix(roster.get_a_student(only_finished =\
-            flag == pdf_flag_list[0], all = flag == pdf_flag_list[-1]),\
-            pdf_save_as)
+        try:
+            fil = file_manager.get_pdf_prefix(roster.get_a_student(only_finished =\
+                flag == pdf_flag_list[0], all = flag == pdf_flag_list[-1]),\
+                pdf_save_as)
+        except KeyboardInterrupt:
+            fil = None
         if fil is not None:
             roster.export_pdfs(fil, only_finished = flag == pdf_flag_list[0],\
                 all = flag == pdf_flag_list[-1], verbose = verbose)
@@ -2010,7 +2023,10 @@ if __name__ == '__main__':
             global email_config_file
             global email_mode
             if val == True:
-                email_config_file = input("Enter email config file: ")
+                try:
+                    email_config_file = input("Enter email config file: ")
+                except KeyboardInterrupt:
+                    email_config_file = 0
             else:
                 email_config_file = None
                 if isinstance(val, str):
@@ -2025,13 +2041,22 @@ if __name__ == '__main__':
         #Supports email
         def email_students():
             global email_manager
+            global email_config_file
             try:
                 if email_manager is None:
-                    manager_setup_menu.prompt()
+                    while True:
+                        manager_setup_menu.prompt()
+                        if email_config_file != 0:
+                            break
+                        else:
+                            email_config_file = None
                     email_manager = EmailManager(from_file = email_config_file,\
                         verbose = verbose, special_mode = email_mode)
-                prefix = file_manager.get_open_pdf_prefix()
-                roster.email_students(prefix, email_manager)
+                try:
+                    prefix = file_manager.get_open_pdf_prefix()
+                    roster.email_students(prefix, email_manager)
+                except KeyboardInterrupt:
+                    print("\nEmailing canceled\n")
             except EmailManagerCanceled:
                 print("\nEmail Setup Canceled")
         main_menu.add_item("Email PDFs", email_students)
