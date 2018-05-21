@@ -1,1 +1,2 @@
 convert to new string formatting
+glob file completer (and rework how "working directories" work)

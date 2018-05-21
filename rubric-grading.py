@@ -52,22 +52,88 @@ EMAIL_CONFIG_COMMENT = '#'
 
 TEX_FONT_SIZE = 12
 
-def seeded_input(msg, text):
-    if sys.platform == 'darwin':
-        #Mac
-        #Make it so can hit up-arrow to get last value
-        readline.add_history(text)
-    else:
-        #Non-Mac
-        #Literally make it last value
-        readline.set_startup_hook(lambda: readline.insert_text(text))
+if 'libedit' in readline.__doc__:
+    readline.parse_and_bind("bind ^I rl_complete")
+    libedit = True
+    #print("Warning: Using libedit readline. Some advanced features may work suboptimally.\n")
+else:
+    readline.parse_and_bind("tab: complete")
+    libedit = False
+
+def seeded_input(msg, text = ""):
+    if text != "":
+        if libedit:
+            #Mac
+            #Make it so can hit up-arrow to get last value
+            readline.add_history(text)
+        else:
+            #Non-Mac
+            #Literally make it last value
+            readline.set_startup_hook(lambda: readline.insert_text(text))
     try:
         return input(msg)
     finally:
         readline.set_startup_hook()
 
+#Input, but where the eligible files are loaded into history
+#and then unloaded afterward
+#extension of '' matches file with no extension
+#extension of None matches all files
+def files_input(msg, dirc = '.', extensions = ['', '.txt']):
+    #Get all the relevant files
+    the_files = []
+    the_dirc = dirc
+    if the_dirc[-1] != os.sep:
+        the_dirc += os.sep
+    for fil in os.listdir(dirc):
+        for extension in extensions:
+            #Is it a file we care about?
+            if extension is None or (extension == '' and fil.find('.') == -1) \
+                    or fil[-len(extension):] == extension:
+                #Make sure it's not a directory
+                if os.path.isfile(the_dirc + fil):
+                    the_files.append(fil)
+                break
+
+    #Completer
+    def listCompleter(text, state):
+        line   = readline.get_line_buffer()
+
+        if not line:
+            return [c + " " for c in the_files][state]
+
+        else:
+            return [c + " " for c in the_files if c.startswith(line)][state]
+
+    readline.set_completer(listCompleter)
+    try:
+        ret = input(msg)
+    finally:
+        readline.set_completer()
+    return ret
+
 #Process a string to, in particular, replace \\n with \n
-def unquote(strg):
+def unquote(strg, latexify = False):
+    if latexify:
+        un_strg = strg
+        #un_strg = unquote(strg)
+        #Replace \n with \\
+        un_strg = un_strg.replace("\\n", "\\\n")
+        #Replace \ with \backslash
+        un_strg = un_strg.replace("\\", "\\textbackslash ")
+        #Replace ^ with \textasciicircum
+        un_strg = un_strg.replace("^", "\\textasciicircum ")
+        #Replace ~ with \textasciitilde
+        un_strg = un_strg.replace("~", "\\textasciitilde ")
+        #Escape some things in LaTeX
+        un_strg = un_strg.replace("_", "\\_")
+        un_strg = un_strg.replace("$", "\\$")
+        un_strg = un_strg.replace("{", "\\{")
+        un_strg = un_strg.replace("}", "\\}")
+        un_strg = un_strg.replace("#", "\\#")
+        un_strg = un_strg.replace("%", "\\%")
+        un_strg = un_strg.replace("&", "\\&")
+        return un_strg
     return eval('"%s"'%strg)
 
 def is_number(strg):
@@ -152,8 +218,11 @@ class Student(GradedEntity):
         return self.email is not None
 
 #Convert a student and a prefix into a .tex name
-def make_file_name(prefix, student, extension):
-    return "%s_%s_%s.%s"%(prefix, student.lname, student.fname, extension)
+def make_file_name(prefix, student, extension=None):
+    if extension is None:
+        return "%s_%s_%s"%(prefix, student.lname, student.fname)
+    else:
+        return "%s_%s_%s.%s"%(prefix, student.lname, student.fname, extension)
 
 def make_tex_name(prefix, student):
     return make_file_name(prefix, student, 'tex')
@@ -168,12 +237,13 @@ def in_char_range(char, a, b):
 def is_splittable(char):
     return not in_char_range(char, 'a', 'z') and\
         not in_char_range(char, 'A', 'Z') and\
-        not in_char_range(char, '0', '9') and char != '_' and char != ' '
+        not in_char_range(char, '0', '9') and char != '_' and char != ' '\
+        and char != '\\'
 
 #Make a word splittable in LaTeX
 def make_tex_word(strg):
     ret = []
-    for letter in strg:
+    for letter in unquote(strg, latexify=True):
         ret.append(letter)
         if is_splittable(letter):
             ret.append('{\\allowbreak}')
@@ -340,15 +410,16 @@ class Roster:
     #Get a student from the roster
     #If necessary, make it one whose grading is in progress or done
     #If can't do that, just return first student
-    def get_a_student(self, only_finished = False, all = False):
+    def get_ok_students(self, only_finished = False, all = False):
         def rubric_is_ok(rubric):
             return all or rubric.is_filled() or (not only_finished and\
                 rubric.is_in_progress())
+        ret = set()
         for student in self.get_students():
             rubric = self.get_rubric(student)
             if rubric_is_ok(rubric):
-                return student
-        return self.get_students()[0]
+                ret.add(student)
+        return ret
 
     #Save all the rubrics
     def save(self, file):
@@ -418,62 +489,40 @@ class Roster:
 
     #Export rubrics into PDFs (via .tex files)
     def export_pdfs(self, pdf_prefix, only_finished = False, all = False, verbose = False):
-        tex_files = []
+        #tex_files = []
         for student in self.get_students():
             rubric = self.get_rubric(student)
             if all or rubric.is_filled() or (not only_finished and\
                     rubric.is_in_progress()):
                 #Include this one
-                fname = make_tex_name(pdf_prefix, student)
-                fd = open(fname, 'w')
-                try:
-                    fd.write("\\documentclass[%dpt]{article}\n"%TEX_FONT_SIZE)
-                    fd.write("\\usepackage{fullpage}\n")
-                    fd.write("\\usepackage[none]{hyphenat}\n")
-                    fd.write("\\usepackage{array}\n")
-                    fd.write("\\usepackage{longtable}\n")
-                    fd.write("\\begin{document}\n\\noindent ")
-                    if self.is_using_groups():
-                        group = self.get_group(student)
-                        fd.write("\\textbf{Group %d}\\\\\n"%group.number)
-                        fd.write(rubric.get_front_matter_tex())
-                        fd.write("\\textbf{Members:} %s\\\\\n"%', '.join(\
-                            ['%s %s'%(s.fname, s.lname) for s in group]))
-                        fd.write("\\textbf{Graded Member:} %s %s\\\\\n"%\
-                            (student.fname, student.lname))
-                    else:
-                        fd.write("\\textbf{%s %s}\\\\\n"%(student.fname, student.lname))
-                        fd.write(rubric.get_front_matter_tex())
-                    fd.write("\n\\noindent\\begin{longtable}{|>{\\raggedright}p{1.7in}|l|l|>{\\raggedright\\arraybackslash}p{2.8in}|}\\hline\n")
-                    fd.write("&\\textbf{TOTAL}&\\textbf{POINTS}&\\textbf{COMMENTS}\\\\\\hline\n\\endhead\n")
-                    fd.write(rubric.get_tex())
-                    fd.write("\\end{longtable}\n")
-                    fd.write("\\end{document}")
-                except:
-                    fd.close()
-                    raise
-                fd.close()
-                tex_files.append(fname)
-                if verbose:
-                    print("%s written successfully"%fname[fname.rfind(os.sep)+1:])
-        print("\nAll .tex files written successfully\n")
-        #Now, compile all of them
-        for tex_file in tex_files:
-            dirc = tex_file[:tex_file.rfind(os.sep)]
-            fname = tex_file[tex_file.rfind(os.sep)+1:-4] + '.pdf'
-            #Remove any old file, if it exists
-            if os.path.isfile(dirc + os.sep + fname):
-                os.remove(dirc + os.sep + fname)
-            args_tex = ['pdflatex', '-output-directory=%s'%dirc,\
-                '-halt-on-error','-interaction=nonstopmode', tex_file]
-            if verbose:
-                subprocess.run(args_tex)
-            else:
-                subprocess.run(args_tex, stdout=subprocess.DEVNULL)
-            if not os.path.isfile(dirc + os.sep + fname):
-                raise ValueError("%s failed to compile"%tex_file[tex_file.rfind(os.sep)+1:])
-            if verbose:
-                print("%s compiled successfully"%fname)
+                fname = make_file_name(pdf_prefix, student)
+                if self.is_using_groups():
+                    group = self.get_group(student)
+                else:
+                    group = None
+                rubric.export_pdf(fname, student=student, group=group, verbose=verbose)
+                #rubric.write_tex(fname, student=student, group=group)
+                #tex_files.append(fname)
+                #if verbose:
+                #    print("%s written successfully"%fname[fname.rfind(os.sep)+1:])
+        # print("\nAll .tex files written successfully\n")
+        # #Now, compile all of them
+        # for tex_file in tex_files:
+        #     dirc = tex_file[:tex_file.rfind(os.sep)]
+        #     fname = tex_file[tex_file.rfind(os.sep)+1:-4] + '.pdf'
+        #     #Remove any old file, if it exists
+        #     if os.path.isfile(dirc + os.sep + fname):
+        #         os.remove(dirc + os.sep + fname)
+        #     args_tex = ['pdflatex', '-output-directory=%s'%dirc,\
+        #         '-halt-on-error','-interaction=nonstopmode', tex_file]
+        #     if verbose:
+        #         subprocess.run(args_tex)
+        #     else:
+        #         subprocess.run(args_tex, stdout=subprocess.DEVNULL)
+        #     if not os.path.isfile(dirc + os.sep + fname):
+        #         raise ValueError("%s failed to compile"%tex_file[tex_file.rfind(os.sep)+1:])
+        #     if verbose:
+        #         print("%s compiled successfully"%fname)
         if verbose:
             print()
         print("All .pdf files compiled successfully\n")
@@ -1258,6 +1307,63 @@ class Rubric:
         del ret[0]
         return '\n'.join(ret) + '\n'
 
+    #Write a .tex file for this rubric
+    def write_tex(self, fname, student=None, group=None, header=None):
+        with open(fname, 'w') as fd:
+            fd.write("\\documentclass[%dpt]{article}\n"%TEX_FONT_SIZE)
+            fd.write("\\usepackage{fullpage}\n")
+            fd.write("\\usepackage[none]{hyphenat}\n")
+            fd.write("\\usepackage{array}\n")
+            fd.write("\\usepackage{longtable}\n")
+            fd.write("\\pagenumbering{gobble}\n")
+            fd.write("\\begin{document}\n\\noindent ")
+            if student is None:
+                fd.write("\\textbf{%s}\\\\\n"%header)
+            elif group is None:
+                fd.write("\\textbf{%s %s}\\\\\n"%(student.fname, student.lname))
+                fd.write(self.get_front_matter_tex())
+            else:
+                fd.write("\\textbf{Group %d}\\\\\n"%group.number)
+                fd.write(self.get_front_matter_tex())
+                fd.write("\\textbf{Members:} %s\\\\\n"%', '.join(\
+                    ['%s %s'%(s.fname, s.lname) for s in group]))
+                fd.write("\\textbf{Graded Member:} %s %s\\\\\n"%\
+                    (student.fname, student.lname))
+
+            fd.write("\n\\noindent\\begin{longtable}{|>{\\raggedright}p{1.7in}|l|l|>{\\raggedright\\arraybackslash}p{2.8in}|}\\hline\n")
+            fd.write("&\\textbf{TOTAL}&\\textbf{POINTS}&\\textbf{COMMENTS}\\\\\\hline\n\\endhead\n")
+            fd.write(self.get_tex())
+            fd.write("\\end{longtable}\n")
+            fd.write("\\end{document}")
+
+    #Write a pdf for this rubric
+    def export_pdf(self, fname, student=None, group=None, verbose=False, header=None):
+        #Write the .tex file
+        tex_fname = "%s.tex"%fname
+        self.write_tex(tex_fname, student=student, group=group, header=header)
+        if verbose:
+            print("\n%s written successfully"%tex_fname[tex_fname.rfind(os.sep)+1:])
+        #print("\nAll .tex files written successfully\n")
+        #Now, compile it
+        dirc = fname[:fname.rfind(os.sep)]
+        pdf_fname = fname[fname.rfind(os.sep)+1:] + '.pdf'
+        #Remove any old file, if it exists
+        if os.path.isfile(dirc + os.sep + pdf_fname):
+            os.remove(dirc + os.sep + pdf_fname)
+        args_tex = ['pdflatex', '-output-directory=%s'%dirc,\
+            '-halt-on-error','-interaction=nonstopmode', tex_fname]
+        if verbose:
+            subprocess.run(args_tex)
+        else:
+            subprocess.run(args_tex, stdout=subprocess.DEVNULL)
+        if not os.path.isfile(dirc + os.sep + pdf_fname):
+            raise ValueError("%s failed to compile"%tex_fname[tex_fname.rfind(os.sep)+1:])
+        if verbose:
+            print("\n%s compiled successfully"%pdf_fname)
+        # if verbose:
+        #     print()
+        # print("All .pdf files compiled successfully\n")
+
 #Class representing a menu item
 class MenuItem:
     def __init__(self, text, callback, *args):
@@ -1454,7 +1560,19 @@ class FileManager:
             returner = lambda a,s: a + s, save_as = False):
         if save_as or self.files[key] is None:
             fil = input(msg)
-            if os.path.isfile(exister(self.directory, fil)):
+            exister_output = exister(self.directory, fil)
+            #print(exister_output)
+            if isinstance(exister_output, str):
+                exists = os.path.isfile(exister_output)
+            else:
+                exists = False
+                for potential_file in exister_output:
+                    if os.path.isfile(potential_file):
+                        exists = True
+                        break
+            #print(exists)
+            #print(os.path.isfile("100-test/test.csv"))
+            if exists:
                 #Confirm overwriting file
                 confirmed = False
                 def confirm(to_confirm):
@@ -1469,12 +1587,17 @@ class FileManager:
             self.files[key] = fil
         return returner(self.directory, self.files[key])
 
-    def get_save_file(self, save_as = False):
+    def get_save_file(self, save_as = False, extension = ""):
+        def the_exister(a, s):
+            if len(extension) == 0 or s[-len(extension):] == extension:
+                return a + s
+            else:
+                return a + s + extension
         return self.get_cond_file("File to save into: ", FileManager.FILE_KEY,\
-            save_as = save_as)
+            save_as = save_as, exister = the_exister)
 
     def get_open_file(self):
-        fil = input("File to open: ")
+        fil = files_input("File to open: ", self.directory)
         if not os.path.isfile(self.directory + fil):
             raise FileNotFoundError("File %s not found"%fil)
         self.files[FileManager.FILE_KEY] = fil
@@ -1484,18 +1607,21 @@ class FileManager:
         return self.get_cond_file("File to export into: ", FileManager.CSV_KEY,\
             save_as = save_as)
 
-    def get_pdf_prefix(self, student = None, save_as = False):
+    def get_pdf_prefix(self, students = set(), save_as = False):
         def the_exister(a, s):
             if s is None:
                 return '.'
             else:
-                return a + make_tex_name(s, student)
+                ret = set()
+                for student in students:
+                    ret.add(a + make_tex_name(s, student))
+                return ret
         return self.get_cond_file("PDF prefix to use: ", FileManager.PDF_KEY,\
             exister = the_exister,\
             confirmer = "Warning: Prefix %s already in use. Overwrite?")
             #, returner = lambda a, s: s, save_as = save_as)
 
-    def get_open_pdf_prefix(self, student = None):
+    def get_open_pdf_prefix(self):
         return self.get_cond_file("PDF prefix to use: ", FileManager.PDF_KEY,\
             exister = lambda a, s: '.',\
             confirmer = "Warning: Prefix %s already in use. Overwrite?")
@@ -1842,6 +1968,9 @@ if __name__ == '__main__':
         print(usage_str)
         sys.exit(0)
 
+    if verbose and libedit:
+        print("Warning: Using libedit readline. Some advanced features may work suboptimally.\n")
+
     #Build the roster
     roster = Roster(student_file)
     if verbose:
@@ -1893,6 +2022,8 @@ if __name__ == '__main__':
             fil = file_manager.get_open_file()
         except FileNotFoundError as err:
             print("Error: %s\n"%str(err))
+            return
+        except KeyboardInterrupt:
             return
         roster.load(fil)
 
@@ -1997,7 +2128,7 @@ if __name__ == '__main__':
     pdf_save_as = False
     def export_pdf(flag):
         try:
-            fil = file_manager.get_pdf_prefix(roster.get_a_student(only_finished =\
+            fil = file_manager.get_pdf_prefix(roster.get_ok_students(only_finished =\
                 flag == pdf_flag_list[0], all = flag == pdf_flag_list[-1]),\
                 pdf_save_as)
         except KeyboardInterrupt:
@@ -2013,10 +2144,22 @@ if __name__ == '__main__':
         pdf_menu.prompt()
     main_menu.add_item("Export PDFs", prompt_pdf, False)
     main_menu.add_item("Export PDFs as", prompt_pdf, True)
+    def export_blank_pdf():
+        try:
+            hdr = unquote(seeded_input("What should it say at the top? ", "Rubric"),\
+                latexify=True)
+            fil = file_manager.get_save_file(save_as=True, extension='.pdf')
+            if fil is not None and len(fil) >= 4 and fil[-4:] == '.pdf':
+                fil = fil[:-4]
+        except KeyboardInterrupt:
+            fil = None
+        if fil is not None:
+            rubric.export_pdf(fil, verbose = verbose, header = hdr)
+    main_menu.add_item("Export blank PDF", export_blank_pdf)
 
     email_manager = None
-    if roster.get_a_student(all = True).has_email():
-        manager_setup_menu = Menu("How to get email data?", menued = False)
+    if roster.get_students()[0].has_email():
+        manager_setup_menu = Menu("How to get email data?", back = False)
         email_config_file = False
         email_mode = None
         def set_email_config_file(val):
@@ -2024,13 +2167,17 @@ if __name__ == '__main__':
             global email_mode
             if val == True:
                 try:
-                    email_config_file = input("Enter email config file: ")
+                    email_config_file = files_input("Enter email config file: ")
                 except KeyboardInterrupt:
                     email_config_file = 0
+                    print()
             else:
                 email_config_file = None
                 if isinstance(val, str):
                     email_mode = val
+        def get_out_here():
+            raise EmailManagerCanceled("canceled")
+        manager_setup_menu.add_item("Back", get_out_here)
         manager_setup_menu.add_item("Enter manually", set_email_config_file, 0)
         manager_setup_menu.add_item("From config file", set_email_config_file,\
             True)
@@ -2058,6 +2205,8 @@ if __name__ == '__main__':
                 except KeyboardInterrupt:
                     print("\nEmailing canceled\n")
             except EmailManagerCanceled:
+                print("\nEmail Setup Canceled")
+            except KeyboardInterrupt:
                 print("\nEmail Setup Canceled")
         main_menu.add_item("Email PDFs", email_students)
 
