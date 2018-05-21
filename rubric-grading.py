@@ -876,10 +876,10 @@ class FrontmatterChangingText:
         self.fm_dict = fm_dict
 
     def __str__(self):
-        if fm_dict[fm] is None:
-            return fm
+        if self.fm_dict[self.fm] is None:
+            return self.fm
         else:
-            return "%s (\"%s\")"%(fm, fm_dict[fm])
+            return "%s (\"%s\")"%(self.fm, self.fm_dict[self.fm])
 
 #Class representing a rubric
 class Rubric:
@@ -1043,8 +1043,8 @@ class Rubric:
 
     #Set front matter for this rubric
     def set_front_matter(self):
-        global saved
         def modify_front_matter(label):
+            global saved
             fm_text = self.frontmatter_dict[label]
             if fm_text is None:
                 fm_text = ""
@@ -1060,17 +1060,20 @@ class Rubric:
                 self.frontmatter_dict[label] = val
         if len(self.frontmatter) == 1:
             modify_front_matter(self.frontmatter[0])
+            return
         elif self.frontmatter_menu is None:
             self.frontmatter_menu = Menu("Select item:", menued = False)
             for fm in self.frontmatter:
                 self.frontmatter_menu.add_item(FrontmatterChangingText(fm,\
                     self.frontmatter_dict), modify_front_matter, fm)
+        self.frontmatter_menu.prompt()
 
     #Add a comment to a category with no field for itself
     def add_auto_comment(self):
         if self.auto_comment_menu is None:
             self.auto_comment_menu = Menu("Select category to add comment to:", menued = False)
             def auto_comment(item):
+                global saved
                 old_comment = item.get_comment()
                 try:
                     comment = seeded_input("Enter comment for %s, or CTRL+C to cancel: "\
@@ -1079,6 +1082,7 @@ class Rubric:
                     print("\nCanceled")
                     return
                 self.changed = True
+                saved = False
                 item.set_comment(comment)
             def traverser(item):
                 if not item.has_own_field():

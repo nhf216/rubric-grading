@@ -1,0 +1,32 @@
+#Two pieces of "front matter": a title and a topic
+&Topic
+&Title
+
+#Students have to fill out a survey indicating what they want to study
+#Worth 5 points, and the category itself has the score
+!SURVEY~5
+
+#Written project proposal
+!PROJECT PROPOSAL
+Title~4
+Grammar~10
+Followed Instructions~6
+
+#Coding part of project
+!SOFTWARE
+Comments at Top~2
+Does what it says it does~15
+Enough work~10
+Organization~10
+Style~10
+Quality~5
+Citations~3
+
+#Presentation of work
+!PRESENTATION
+Title~2
+Problem~4
+Solution~4
+Results~4
+Quality of Visuals~3
+Professionalism/Quality~3
