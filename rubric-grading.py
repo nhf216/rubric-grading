@@ -252,7 +252,8 @@ def make_tex_word(strg):
 #Class representing an email template
 class EmailTemplate:
     def __init__(self, message = None, closing = None, subject = None,\
-            my_email = None, my_name = None, greeting = "Dear %s,", pdf_prefix = ""):
+            my_email = None, my_name = None, greeting = "Dear %s,",
+            pdf_prefix = "", attachments = []):
         self.message = message
         self.closing = closing
         self.greeting = greeting
@@ -260,6 +261,7 @@ class EmailTemplate:
         self.subject = subject
         self.from_email = my_email
         self.from_name = my_name
+        self.attachments = []
 
     #Prepare an email to the given student
     def render(self, student, message = None):
@@ -274,6 +276,7 @@ class EmailTemplate:
         email_msg['Subject'] = self.subject
         email_msg['From'] = "%s <%s>"%(self.from_name, self.from_email)
         email_msg['To'] = "%s %s <%s>"%(student.fname, student.lname, student.email)
+        #Attach the PDF rubric
         pdf_name = make_pdf_name(self.pdf_prefix, student)
         file_name = pdf_name[pdf_name.rfind(os.sep)+1:]
         with open(pdf_name, 'rb') as att:
@@ -285,7 +288,20 @@ class EmailTemplate:
             ctype = 'application/octet-stream'
         maintype, subtype = ctype.split('/', 1)
         email_msg.add_attachment(att_data, maintype=maintype, subtype=subtype, filename=file_name)
+        #Attach any other attachments
+        for attachment in self.attachments:
+            file_name = attachment[pdf_name.rfind(os.sep)+1:]
+            with open(attachment, 'rb') as att:
+                att_data = att.read()
+            ctype, encoding = mimetypes.guess_type(attachment)
+            if ctype is None or encoding is not None:
+                # No guess could be made, or the file is encoded (compressed), so
+                # use a generic bag-of-bits type.
+                ctype = 'application/octet-stream'
+            maintype, subtype = ctype.split('/', 1)
+            email_msg.add_attachment(att_data, maintype=maintype, subtype=subtype, filename=file_name)
         return email_msg
+
 
 #Class representing all the graded entities in the class
 class Roster:
@@ -556,11 +572,26 @@ class Roster:
             else:
                 break
         closing = unquote(closing)
+        #Any extra attachments?
+        atts = []
+        att_path = ""
+        while True:
+            att_path = files_input("Extra attachment: ",
+                                        dirc = '/',
+                                        extensions = [None]).strip()
+            print(att_path)
+            if att_path == '':
+                #No attachment; done
+                break
+            if os.path.isfile(att_path):
+                atts.append(att_path)
+            else:
+                print("Error: File not found: %s"%att_path)
         #Set the template
         email_template = EmailTemplate(message = body, closing = closing,\
             subject = subject, my_email = email_manager.get_email(),\
             my_name = email_manager.get_name(), greeting = greeting,\
-            pdf_prefix = pdf_prefix)
+            pdf_prefix = pdf_prefix, attachments = atts)
         send_ok = True
         new_body = False
         previewed = False
@@ -578,11 +609,20 @@ class Roster:
             previewed = True
             webbrowser.open_new(r'file://%s'%os.path.abspath(fname))
             print_delay("")
+        def preview_attachments():
+            nonlocal atts
+            nonlocal previewed
+            previewed = True
+            for att in atts:
+                print("Previewing attachment: %s"%att)
+                webbrowser.open_new(r'file://%s'%os.path.abspath(att))
+                print_delay("")
         email_edit_menu = Menu("Action", back = False)
         email_edit_menu.add_item("Looks good!", lambda : None)
         email_edit_menu.add_item("Don't send!", send_not_ok)
         email_edit_menu.add_item("Edit body", edit_body)
         email_edit_menu.add_item("Preview PDF", preview_pdf)
+        email_edit_menu.add_item("Preview Extra Attachments", preview_attachments)
         #Log into email_manager
         email_manager.login()
         #Go through students
@@ -605,6 +645,8 @@ class Roster:
                 #Send
                 if send_ok:
                     email_manager.send_message(email_msg)
+            elif verbose:
+                print("File not found: %s\nSkipping...\n"%fname)
         #Log out of email_manager
         email_manager.logout()
 
@@ -1637,6 +1679,7 @@ class EmailManagerCanceled(Exception):
 
 #Class for managing email stuff
 class EmailManager:
+    dummy_mode = 'Dummy'
     known_modes = {
         'Gmail':['imap.gmail.com', 'SSL', 'smtp.gmail.com', 'SSL', 'Sent'],
         'Microsoft':['outlook.office365.com', 'SSL', 'smtp.office365.com',\
@@ -1660,8 +1703,13 @@ class EmailManager:
         self.verbose = verbose
         self.imap_server = None
         self.smtp_server = None
+        self.dummy = False
         while not ok:
-            if the_file is None:
+            if special_mode == EmailManager.dummy_mode:
+                self.dummy = True
+                print("Dummy email manager created successfully")
+                return
+            elif the_file is None:
                 #Enter the info
                 #Name
                 self.name = seeded_input("Enter your name: ", self.name)
@@ -1814,6 +1862,10 @@ class EmailManager:
 
     #Log into IMAP server
     def imap_login(self):
+        if self.dummy:
+            if self.verbose:
+                print("Dummy: imap login")
+            return
         if self.imap_server is not None:
             # #Log out first if already logged in
             # self.imap_logout()
@@ -1851,6 +1903,10 @@ class EmailManager:
 
     #Log into SMTP server
     def smtp_login(self):
+        if self.dummy:
+            if self.verbose:
+                print("Dummy: smtp login")
+            return
         if self.smtp_server is not None:
             # #Log out first if already logged in
             # self.smtp_logout()
@@ -1878,6 +1934,10 @@ class EmailManager:
 
     #Log out from IMAP server
     def imap_logout(self):
+        if self.dummy:
+            if self.verbose:
+                print("Dummy: imap logout")
+            return
         if self.imap_server is not None:
             if self.verbose:
                 print("Logging out of IMAP server...")
@@ -1886,6 +1946,10 @@ class EmailManager:
 
     #Log out from SMTP server
     def smtp_logout(self):
+        if self.dummy:
+            if verbose:
+                print("Dummy: smtp logout")
+            return
         if self.smtp_server is not None:
             if self.verbose:
                 print("Logging out of SMTP server...")
@@ -1895,6 +1959,10 @@ class EmailManager:
     #Send the email message
     #Store a copy in the sent folder
     def send_message(self, email_msg):
+        if self.dummy:
+            if self.verbose:
+                print("Dummy: send message")
+            return
         #IMAP stuff
         #Copy the message
         date = imaplib.Time2Internaldate(time.time())
@@ -1919,6 +1987,10 @@ class EmailManager:
         #SMTP stuff
         self.smtp_server.send_message(email_msg)
         print("Message sent")
+
+    #Is this manager a dummy?
+    def is_dummy(self):
+        return self.dummy
 
 def print_delay(stuff):
     print(stuff)
@@ -2171,7 +2243,7 @@ if __name__ == '__main__':
             global email_mode
             if val == True:
                 try:
-                    email_config_file = files_input("Enter email config file: ")
+                    email_config_file = files_input("Enter email config file: ").strip()
                 except KeyboardInterrupt:
                     email_config_file = 0
                     print()
@@ -2189,12 +2261,14 @@ if __name__ == '__main__':
             'Gmail')
         manager_setup_menu.add_item("Manual Microsoft", set_email_config_file,\
             'Microsoft')
+        manager_setup_menu.add_item("Use Dummy (for testing)", set_email_config_file,\
+            EmailManager.dummy_mode)
         #Supports email
         def email_students():
             global email_manager
             global email_config_file
             try:
-                if email_manager is None:
+                if email_manager is None or email_manager.is_dummy():
                     while True:
                         manager_setup_menu.prompt()
                         if email_config_file != 0:
@@ -2210,6 +2284,8 @@ if __name__ == '__main__':
                     print("\nEmailing canceled\n")
             except EmailManagerCanceled:
                 print("\nEmail Setup Canceled")
+            except FileNotFoundError:
+                print("\nFile %s not found\nEmail Setup Canceled"%email_config_file)
             except KeyboardInterrupt:
                 print("\nEmail Setup Canceled")
         main_menu.add_item("Email PDFs", email_students)
