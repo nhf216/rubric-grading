@@ -82,34 +82,93 @@ def seeded_input(msg, text = ""):
 def files_input(msg, dirc = '.', extensions = ['', '.txt']):
     #Get all the relevant files
     the_files = []
-    the_dirc = dirc
-    if the_dirc[-1] != os.sep:
-        the_dirc += os.sep
-    for fil in os.listdir(dirc):
-        for extension in extensions:
-            #Is it a file we care about?
-            if extension is None or (extension == '' and fil.find('.') == -1) \
-                    or fil[-len(extension):] == extension:
-                #Make sure it's not a directory
-                if os.path.isfile(the_dirc + fil):
-                    the_files.append(fil)
-                break
+    last_seed = -1
+    def load_files(seed):
+        nonlocal the_files
+        nonlocal last_seed
+        nonlocal dirc
+        #Make sure we're not tying up resources
+        seed = seed.strip()
+        if seed == last_seed:
+            return
+        last_seed = seed
+        the_files = []
+        #print("\n", seed)
+        #Find out what directory we're in
+        last_sep = seed.rfind(os.sep)
+        #print(last_sep)
+        if last_sep == -1:
+            the_dirc = dirc
+            tdir = ""
+        elif seed[0] != os.sep:
+            the_dirc = dirc + seed[:last_sep]
+            tdir = seed[:last_sep+1]
+        else:
+            #print("hi")
+            the_dirc = seed[:last_sep]
+            tdir = seed[:last_sep+1]
+            #print(the_dirc, tdir, "bye")
+        if len(the_dirc) == 0 or the_dirc[-1] != os.sep:
+            the_dirc += os.sep
+        #Make sure we actually have a directory
+        if not os.path.isdir(the_dirc):
+            #We don't
+            return
+        #print(last_sep, the_dirc, tdir)
+        #Load the files
+        for fil in os.listdir(the_dirc):
+            #Include directories
+            if os.path.isdir(the_dirc + fil):
+                the_files.append(tdir + fil + os.sep)
+            else:
+                for extension in extensions:
+                    #Is it a file we care about?
+                    if extension is None or (extension == '' and fil.find('.') == -1) \
+                            or fil[-len(extension):] == extension:
+                        #Make sure it's a file
+                        if os.path.isfile(the_dirc + fil):
+                            the_files.append(tdir + fil)
+                        break
+        #print(the_files)
+        #print(seed)
+
+    ##Get all the relevant files
+    #the_files = []
+    #the_dirc = dirc
+    #if the_dirc[-1] != os.sep:
+    #    the_dirc += os.sep
+    #for fil in os.listdir(dirc):
+    #    for extension in extensions:
+    #        #Is it a file we care about?
+    #        if extension is None or (extension == '' and fil.find('.') == -1) \
+    #                or fil[-len(extension):] == extension:
+    #            #Make sure it's not a directory
+    #            if os.path.isfile(the_dirc + fil):
+    #                the_files.append(fil)
+    #            break
 
     #Completer
     def listCompleter(text, state):
+        #Get the files
+        load_files(text)
+
         line   = readline.get_line_buffer()
 
         if not line:
-            return [c + " " for c in the_files][state]
+            return [c  for c in the_files][state]
 
         else:
-            return [c + " " for c in the_files if c.startswith(line)][state]
+            return [c  for c in the_files if c.startswith(line)][state]
 
     readline.set_completer(listCompleter)
     try:
         ret = input(msg)
     finally:
         readline.set_completer()
+
+    #un-escape spaces
+    ret = ret.replace("\\ ", " ")
+
     return ret
 
 #Process a string to, in particular, replace \\n with \n
@@ -272,7 +331,11 @@ class EmailTemplate:
         # if the_directory[-1] != os.sep:
         #     the_directory += os.sep
         email_msg = email.message.EmailMessage()
-        email_msg.set_content("%s\n\n\t%s\n\n%s"%(self.greeting%student.fname, body, self.closing))
+        if "%s" in self.greeting:
+            greeting = self.greeting%student.fname
+        else:
+            greeting = self.greeting
+        email_msg.set_content("%s\n\n\t%s\n\n%s"%(greeting, body, self.closing))
         email_msg['Subject'] = self.subject
         email_msg['From'] = "%s <%s>"%(self.from_name, self.from_email)
         email_msg['To'] = "%s %s <%s>"%(student.fname, student.lname, student.email)
@@ -577,9 +640,8 @@ class Roster:
         att_path = ""
         while True:
             att_path = files_input("Extra attachment: ",
-                                        dirc = '/',
                                         extensions = [None]).strip()
-            print(att_path)
+            #print(att_path)
             if att_path == '':
                 #No attachment; done
                 break
