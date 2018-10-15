@@ -2,7 +2,7 @@ import sys
 import os
 import re
 import readline
-import collections
+import collections.abc
 import subprocess
 import webbrowser
 
@@ -503,7 +503,11 @@ class Roster:
     #Save all the rubrics
     def save(self, file):
         global saved
-        fd = open(file, 'w')
+        try:
+            fd = open(file, 'w')
+        except FileNotFoundError:
+            print("Error: File %s not found"%file)
+            return
         try:
             for entity in self.graded_entities:
                 fd.write("%s%s\n"%(ROSTER_SAVE_SYMBOL, str(entity)))
@@ -1419,6 +1423,7 @@ class Rubric:
     def write_tex(self, fname, student=None, group=None, header=None):
         with open(fname, 'w') as fd:
             fd.write("\\documentclass[%dpt]{article}\n"%TEX_FONT_SIZE)
+            fd.write("\\usepackage[T1]{fontenc}\n")
             fd.write("\\usepackage{fullpage}\n")
             fd.write("\\usepackage[none]{hyphenat}\n")
             fd.write("\\usepackage{array}\n")
@@ -1591,12 +1596,12 @@ class ChangingText:
 
     def __str__(self):
         if self.conditional(*self.args):
-            if isinstance(self.text1, collections.Callable):
+            if isinstance(self.text1, collections.abc.Callable):
                 return self.text1(*self.args)
             else:
                 return self.text1
         else:
-            if isinstance(self.text2, collections.Callable):
+            if isinstance(self.text2, collections.abc.Callable):
                 return self.text2(*self.args)
             else:
                 return self.text2
