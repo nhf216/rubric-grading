@@ -47,6 +47,7 @@ RUBRIC_POINT_SEP = '~'
 ROSTER_SAVE_SYMBOL = '?'
 RUBRIC_SAVE_SEPARATOR = ':'
 RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '&'
+RUBRIC_ATTACHMENT_INDICATOR = '$'
 
 EMAIL_CONFIG_COMMENT = '#'
 
@@ -323,7 +324,7 @@ class EmailTemplate:
         self.attachments = []
 
     #Prepare an email to the given student
-    def render(self, student, message = None):
+    def render(self, student, message = None, attachments = []):
         body = message
         if body is None:
             body = self.message
@@ -352,8 +353,11 @@ class EmailTemplate:
         maintype, subtype = ctype.split('/', 1)
         email_msg.add_attachment(att_data, maintype=maintype, subtype=subtype, filename=file_name)
         #Attach any other attachments
-        for attachment in self.attachments:
-            file_name = attachment[pdf_name.rfind(os.sep)+1:]
+        atts = set(self.attachments)
+        for att in attachments:
+            atts.add(att)
+        for attachment in atts:
+            file_name = attachment[attachment.rfind(os.sep)+1:]
             with open(attachment, 'rb') as att:
                 att_data = att.read()
             ctype, encoding = mimetypes.guess_type(attachment)
@@ -639,29 +643,30 @@ class Roster:
             else:
                 break
         closing = unquote(closing)
-        #Any extra attachments?
-        atts = []
-        att_path = ""
-        while True:
-            att_path = files_input("Extra attachment: ",
-                                        extensions = [None]).strip()
-            #print(att_path)
-            if att_path == '':
-                #No attachment; done
-                break
-            if os.path.isfile(att_path):
-                atts.append(att_path)
-            else:
-                print("Error: File not found: %s"%att_path)
+        ##Any extra attachments?
+        #atts = []
+        #att_path = ""
+        #while True:
+        #    att_path = files_input("Extra attachment: ",
+        #                                extensions = [None]).strip()
+        #    #print(att_path)
+        #    if att_path == '':
+        #        #No attachment; done
+        #        break
+        #    if os.path.isfile(att_path):
+        #        atts.append(att_path)
+        #    else:
+        #        print("Error: File not found: %s"%att_path)
         #Set the template
         email_template = EmailTemplate(message = body, closing = closing,\
             subject = subject, my_email = email_manager.get_email(),\
             my_name = email_manager.get_name(), greeting = greeting,\
-            pdf_prefix = pdf_prefix, attachments = atts)
+            pdf_prefix = pdf_prefix)
         send_ok = True
         new_body = False
         previewed = False
         fname = None
+        global_atts = set()
         def send_not_ok():
             nonlocal send_ok
             send_ok = False
@@ -676,10 +681,13 @@ class Roster:
             webbrowser.open_new(r'file://%s'%os.path.abspath(fname))
             print_delay("")
         def preview_attachments():
-            nonlocal atts
+            nonlocal global_atts
             nonlocal previewed
             previewed = True
-            for att in atts:
+            if len(global_atts) == 0:
+                print("No extra attachments to preview")
+                return
+            for att in global_atts:
                 print("Previewing attachment: %s"%att)
                 webbrowser.open_new(r'file://%s'%os.path.abspath(att))
                 print_delay("")
@@ -694,12 +702,14 @@ class Roster:
         #Go through students
         for student in self.get_students():
             fname = make_pdf_name(pdf_prefix, student)
+            global_atts = self.get_rubric(student).get_attachments()
             if os.path.isfile(fname):
                 send_ok = True
                 while True:
                     #Prep email
                     if not previewed:
-                        email_msg = email_template.render(student, message = body)
+                        email_msg = email_template.render(student, message = body,\
+                                                            attachments = global_atts)
                     #Offer to edit
                     new_body = False
                     previewed = False
@@ -997,6 +1007,7 @@ class Rubric:
         self.menu = None
         self.frontmatter_menu = None
         self.auto_comment_menu = None
+        self.att_menu = None
         #Flag to keep track of if this thing has been saved
         self.changed = False
         if isinstance(from_file_or_rubric, Rubric):
@@ -1004,6 +1015,7 @@ class Rubric:
             other = from_file_or_rubric
             self.frontmatter = list(other.frontmatter)
             self.frontmatter_dict = dict(other.frontmatter_dict)
+            self.attachments = set(other.attachments)
             self.total = other.total.copy(reference_student)
             return
         #It's from a file
@@ -1011,6 +1023,8 @@ class Rubric:
         #Things that need to be manually entered (e.g. a title)
         self.frontmatter = []
         self.frontmatter_dict = dict()
+        #Attachments
+        self.attachments = set()
         #List of categories
         self.total = Category("TOTAL")
         #Keep track of current category
@@ -1199,6 +1213,43 @@ class Rubric:
             self.total.traverse(traverser, ignore_blanks = False)
         self.auto_comment_menu.prompt()
 
+    def remove_attachment(self, att):
+        global saved
+        self.attachments.remove(att)
+        saved = False
+        self.changed = True
+
+    def add_attachment(self, att):
+        global saved
+        if os.path.isfile(att):
+            self.attachments.add(att)
+        else:
+            print("Error: File not found: %s"%att)
+            return
+        saved = False
+        self.changed = True
+
+    #Get attachments
+    def get_attachments(self):
+        return set(self.attachments)
+
+    #Manage attachments
+    def manage_attachments(self):
+        self.att_menu = Menu("Select option:", menued = False)
+        def add_attachment():
+            try:
+                att = files_input("Filename to attach, or CTRL+C to cancel: ",
+                                            extensions = [None])
+            except KeyboardInterrupt:
+                print("\nCanceled\n")
+                return
+            else:
+                self.add_attachment(att)
+        self.att_menu.add_item("New Attachment", add_attachment)
+        for att in self.attachments:
+            self.att_menu.add_item("Delete %s"%att, self.remove_attachment, att)
+        self.att_menu.prompt()
+
 
     #Build a menu out of this rubric
     def get_menu(self):
@@ -1228,6 +1279,8 @@ class Rubric:
         self.menu.add_item(ChangingText("Add comment to auto-scored category (in progress)",\
             "Add comment to auto-scored category", self.is_auto_comment_in_progress),\
             self.add_auto_comment)
+        #Add attachments to the thing
+        self.menu.add_item("Manage attachments", self.manage_attachments)
         self.menu.add_item("Set rest to 100%", self.total.fill_scores)
         return self.menu
 
@@ -1294,6 +1347,9 @@ class Rubric:
             nonlocal ret
             ret += add_str
         self.total.traverse(transcriber, accumulator, ignore_blanks = False)
+        #Add on attachments
+        for att in self.attachments:
+            ret += '%s%s\n'%(RUBRIC_ATTACHMENT_INDICATOR, att)
         self.save()
         return ret
 
@@ -1309,6 +1365,10 @@ class Rubric:
             if line_pieces[0][0] == RUBRIC_FRONT_MATTER_SAVE_INDICATOR:
                 #Front matter
                 self.frontmatter_dict[line_pieces[0][1:]] = line_pieces[1]
+                continue
+            elif line_pieces[0][0] == RUBRIC_ATTACHMENT_INDICATOR:
+                #Attachment
+                self.attachments.add(line_pieces[0][1:])
                 continue
             the_id = int(line_pieces[0])
             if len(line_pieces[1]) > 0 and not is_number(line_pieces[1]):
