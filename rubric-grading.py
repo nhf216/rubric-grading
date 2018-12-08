@@ -2,7 +2,7 @@ import sys
 import os
 import re
 import readline
-import collections
+import collections.abc
 import subprocess
 import webbrowser
 
@@ -47,6 +47,7 @@ RUBRIC_POINT_SEP = '~'
 ROSTER_SAVE_SYMBOL = '?'
 RUBRIC_SAVE_SEPARATOR = ':'
 RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '&'
+RUBRIC_ATTACHMENT_INDICATOR = '$'
 
 EMAIL_CONFIG_COMMENT = '#'
 
@@ -82,34 +83,93 @@ def seeded_input(msg, text = ""):
 def files_input(msg, dirc = '.', extensions = ['', '.txt']):
     #Get all the relevant files
     the_files = []
-    the_dirc = dirc
-    if the_dirc[-1] != os.sep:
-        the_dirc += os.sep
-    for fil in os.listdir(dirc):
-        for extension in extensions:
-            #Is it a file we care about?
-            if extension is None or (extension == '' and fil.find('.') == -1) \
-                    or fil[-len(extension):] == extension:
-                #Make sure it's not a directory
-                if os.path.isfile(the_dirc + fil):
-                    the_files.append(fil)
-                break
+    last_seed = -1
+    def load_files(seed):
+        nonlocal the_files
+        nonlocal last_seed
+        nonlocal dirc
+        #Make sure we're not tying up resources
+        seed = seed.strip()
+        if seed == last_seed:
+            return
+        last_seed = seed
+        the_files = []
+        #print("\n", seed)
+        #Find out what directory we're in
+        last_sep = seed.rfind(os.sep)
+        #print(last_sep)
+        if last_sep == -1:
+            the_dirc = dirc
+            tdir = ""
+        elif seed[0] != os.sep:
+            the_dirc = dirc + seed[:last_sep]
+            tdir = seed[:last_sep+1]
+        else:
+            #print("hi")
+            the_dirc = seed[:last_sep]
+            tdir = seed[:last_sep+1]
+            #print(the_dirc, tdir, "bye")
+        if len(the_dirc) == 0 or the_dirc[-1] != os.sep:
+            the_dirc += os.sep
+        #Make sure we actually have a directory
+        if not os.path.isdir(the_dirc):
+            #We don't
+            return
+        #print(last_sep, the_dirc, tdir)
+        #Load the files
+        for fil in os.listdir(the_dirc):
+            #Include directories
+            if os.path.isdir(the_dirc + fil):
+                the_files.append(tdir + fil + os.sep)
+            else:
+                for extension in extensions:
+                    #Is it a file we care about?
+                    if extension is None or (extension == '' and fil.find('.') == -1) \
+                            or fil[-len(extension):] == extension:
+                        #Make sure it's a file
+                        if os.path.isfile(the_dirc + fil):
+                            the_files.append(tdir + fil)
+                        break
+        #print(the_files)
+        #print(seed)
+
+    ##Get all the relevant files
+    #the_files = []
+    #the_dirc = dirc
+    #if the_dirc[-1] != os.sep:
+    #    the_dirc += os.sep
+    #for fil in os.listdir(dirc):
+    #    for extension in extensions:
+    #        #Is it a file we care about?
+    #        if extension is None or (extension == '' and fil.find('.') == -1) \
+    #                or fil[-len(extension):] == extension:
+    #            #Make sure it's not a directory
+    #            if os.path.isfile(the_dirc + fil):
+    #                the_files.append(fil)
+    #            break
 
     #Completer
     def listCompleter(text, state):
+        #Get the files
+        load_files(text)
+
         line   = readline.get_line_buffer()
 
         if not line:
-            return [c + " " for c in the_files][state]
+            return [c  for c in the_files][state]
 
         else:
-            return [c + " " for c in the_files if c.startswith(line)][state]
+            return [c  for c in the_files if c.startswith(line)][state]
 
     readline.set_completer(listCompleter)
     try:
         ret = input(msg)
     finally:
         readline.set_completer()
+
+    #un-escape spaces
+    ret = ret.replace("\\ ", " ")
+
     return ret
 
 #Process a string to, in particular, replace \\n with \n
@@ -252,7 +312,8 @@ def make_tex_word(strg):
 #Class representing an email template
 class EmailTemplate:
     def __init__(self, message = None, closing = None, subject = None,\
-            my_email = None, my_name = None, greeting = "Dear %s,", pdf_prefix = ""):
+            my_email = None, my_name = None, greeting = "Dear %s,",
+            pdf_prefix = "", attachments = []):
         self.message = message
         self.closing = closing
         self.greeting = greeting
@@ -260,9 +321,10 @@ class EmailTemplate:
         self.subject = subject
         self.from_email = my_email
         self.from_name = my_name
+        self.attachments = []
 
     #Prepare an email to the given student
-    def render(self, student, message = None):
+    def render(self, student, message = None, attachments = []):
         body = message
         if body is None:
             body = self.message
@@ -270,10 +332,15 @@ class EmailTemplate:
         # if the_directory[-1] != os.sep:
         #     the_directory += os.sep
         email_msg = email.message.EmailMessage()
-        email_msg.set_content("%s\n\n\t%s\n\n%s"%(self.greeting%student.fname, body, self.closing))
+        if "%s" in self.greeting:
+            greeting = self.greeting%student.fname
+        else:
+            greeting = self.greeting
+        email_msg.set_content("%s\n\n\t%s\n\n%s"%(greeting, body, self.closing))
         email_msg['Subject'] = self.subject
         email_msg['From'] = "%s <%s>"%(self.from_name, self.from_email)
         email_msg['To'] = "%s %s <%s>"%(student.fname, student.lname, student.email)
+        #Attach the PDF rubric
         pdf_name = make_pdf_name(self.pdf_prefix, student)
         file_name = pdf_name[pdf_name.rfind(os.sep)+1:]
         with open(pdf_name, 'rb') as att:
@@ -285,7 +352,23 @@ class EmailTemplate:
             ctype = 'application/octet-stream'
         maintype, subtype = ctype.split('/', 1)
         email_msg.add_attachment(att_data, maintype=maintype, subtype=subtype, filename=file_name)
+        #Attach any other attachments
+        atts = set(self.attachments)
+        for att in attachments:
+            atts.add(att)
+        for attachment in atts:
+            file_name = attachment[attachment.rfind(os.sep)+1:]
+            with open(attachment, 'rb') as att:
+                att_data = att.read()
+            ctype, encoding = mimetypes.guess_type(attachment)
+            if ctype is None or encoding is not None:
+                # No guess could be made, or the file is encoded (compressed), so
+                # use a generic bag-of-bits type.
+                ctype = 'application/octet-stream'
+            maintype, subtype = ctype.split('/', 1)
+            email_msg.add_attachment(att_data, maintype=maintype, subtype=subtype, filename=file_name)
         return email_msg
+
 
 #Class representing all the graded entities in the class
 class Roster:
@@ -424,7 +507,11 @@ class Roster:
     #Save all the rubrics
     def save(self, file):
         global saved
-        fd = open(file, 'w')
+        try:
+            fd = open(file, 'w')
+        except FileNotFoundError:
+            print("Error: File %s not found"%file)
+            return
         try:
             for entity in self.graded_entities:
                 fd.write("%s%s\n"%(ROSTER_SAVE_SYMBOL, str(entity)))
@@ -556,6 +643,20 @@ class Roster:
             else:
                 break
         closing = unquote(closing)
+        ##Any extra attachments?
+        #atts = []
+        #att_path = ""
+        #while True:
+        #    att_path = files_input("Extra attachment: ",
+        #                                extensions = [None]).strip()
+        #    #print(att_path)
+        #    if att_path == '':
+        #        #No attachment; done
+        #        break
+        #    if os.path.isfile(att_path):
+        #        atts.append(att_path)
+        #    else:
+        #        print("Error: File not found: %s"%att_path)
         #Set the template
         email_template = EmailTemplate(message = body, closing = closing,\
             subject = subject, my_email = email_manager.get_email(),\
@@ -565,6 +666,7 @@ class Roster:
         new_body = False
         previewed = False
         fname = None
+        global_atts = set()
         def send_not_ok():
             nonlocal send_ok
             send_ok = False
@@ -578,22 +680,36 @@ class Roster:
             previewed = True
             webbrowser.open_new(r'file://%s'%os.path.abspath(fname))
             print_delay("")
+        def preview_attachments():
+            nonlocal global_atts
+            nonlocal previewed
+            previewed = True
+            if len(global_atts) == 0:
+                print("No extra attachments to preview")
+                return
+            for att in global_atts:
+                print("Previewing attachment: %s"%att)
+                webbrowser.open_new(r'file://%s'%os.path.abspath(att))
+                print_delay("")
         email_edit_menu = Menu("Action", back = False)
         email_edit_menu.add_item("Looks good!", lambda : None)
         email_edit_menu.add_item("Don't send!", send_not_ok)
         email_edit_menu.add_item("Edit body", edit_body)
         email_edit_menu.add_item("Preview PDF", preview_pdf)
+        email_edit_menu.add_item("Preview Extra Attachments", preview_attachments)
         #Log into email_manager
         email_manager.login()
         #Go through students
         for student in self.get_students():
             fname = make_pdf_name(pdf_prefix, student)
+            global_atts = self.get_rubric(student).get_attachments()
             if os.path.isfile(fname):
                 send_ok = True
                 while True:
                     #Prep email
                     if not previewed:
-                        email_msg = email_template.render(student, message = body)
+                        email_msg = email_template.render(student, message = body,\
+                                                            attachments = global_atts)
                     #Offer to edit
                     new_body = False
                     previewed = False
@@ -605,6 +721,8 @@ class Roster:
                 #Send
                 if send_ok:
                     email_manager.send_message(email_msg)
+            elif verbose:
+                print("File not found: %s\nSkipping...\n"%fname)
         #Log out of email_manager
         email_manager.logout()
 
@@ -889,6 +1007,7 @@ class Rubric:
         self.menu = None
         self.frontmatter_menu = None
         self.auto_comment_menu = None
+        self.att_menu = None
         #Flag to keep track of if this thing has been saved
         self.changed = False
         if isinstance(from_file_or_rubric, Rubric):
@@ -896,6 +1015,7 @@ class Rubric:
             other = from_file_or_rubric
             self.frontmatter = list(other.frontmatter)
             self.frontmatter_dict = dict(other.frontmatter_dict)
+            self.attachments = set(other.attachments)
             self.total = other.total.copy(reference_student)
             return
         #It's from a file
@@ -903,6 +1023,8 @@ class Rubric:
         #Things that need to be manually entered (e.g. a title)
         self.frontmatter = []
         self.frontmatter_dict = dict()
+        #Attachments
+        self.attachments = set()
         #List of categories
         self.total = Category("TOTAL")
         #Keep track of current category
@@ -1091,6 +1213,43 @@ class Rubric:
             self.total.traverse(traverser, ignore_blanks = False)
         self.auto_comment_menu.prompt()
 
+    def remove_attachment(self, att):
+        global saved
+        self.attachments.remove(att)
+        saved = False
+        self.changed = True
+
+    def add_attachment(self, att):
+        global saved
+        if os.path.isfile(att):
+            self.attachments.add(att)
+        else:
+            print("Error: File not found: %s"%att)
+            return
+        saved = False
+        self.changed = True
+
+    #Get attachments
+    def get_attachments(self):
+        return set(self.attachments)
+
+    #Manage attachments
+    def manage_attachments(self):
+        self.att_menu = Menu("Select option:", menued = False)
+        def add_attachment():
+            try:
+                att = files_input("Filename to attach, or CTRL+C to cancel: ",
+                                            extensions = [None])
+            except KeyboardInterrupt:
+                print("\nCanceled\n")
+                return
+            else:
+                self.add_attachment(att)
+        self.att_menu.add_item("New Attachment", add_attachment)
+        for att in self.attachments:
+            self.att_menu.add_item("Delete %s"%att, self.remove_attachment, att)
+        self.att_menu.prompt()
+
 
     #Build a menu out of this rubric
     def get_menu(self):
@@ -1120,6 +1279,8 @@ class Rubric:
         self.menu.add_item(ChangingText("Add comment to auto-scored category (in progress)",\
             "Add comment to auto-scored category", self.is_auto_comment_in_progress),\
             self.add_auto_comment)
+        #Add attachments to the thing
+        self.menu.add_item("Manage attachments", self.manage_attachments)
         self.menu.add_item("Set rest to 100%", self.total.fill_scores)
         return self.menu
 
@@ -1186,6 +1347,9 @@ class Rubric:
             nonlocal ret
             ret += add_str
         self.total.traverse(transcriber, accumulator, ignore_blanks = False)
+        #Add on attachments
+        for att in self.attachments:
+            ret += '%s%s\n'%(RUBRIC_ATTACHMENT_INDICATOR, att)
         self.save()
         return ret
 
@@ -1201,6 +1365,10 @@ class Rubric:
             if line_pieces[0][0] == RUBRIC_FRONT_MATTER_SAVE_INDICATOR:
                 #Front matter
                 self.frontmatter_dict[line_pieces[0][1:]] = line_pieces[1]
+                continue
+            elif line_pieces[0][0] == RUBRIC_ATTACHMENT_INDICATOR:
+                #Attachment
+                self.attachments.add(line_pieces[0][1:])
                 continue
             the_id = int(line_pieces[0])
             if len(line_pieces[1]) > 0 and not is_number(line_pieces[1]):
@@ -1315,6 +1483,7 @@ class Rubric:
     def write_tex(self, fname, student=None, group=None, header=None):
         with open(fname, 'w') as fd:
             fd.write("\\documentclass[%dpt]{article}\n"%TEX_FONT_SIZE)
+            fd.write("\\usepackage[T1]{fontenc}\n")
             fd.write("\\usepackage{fullpage}\n")
             fd.write("\\usepackage[none]{hyphenat}\n")
             fd.write("\\usepackage{array}\n")
@@ -1487,12 +1656,12 @@ class ChangingText:
 
     def __str__(self):
         if self.conditional(*self.args):
-            if isinstance(self.text1, collections.Callable):
+            if isinstance(self.text1, collections.abc.Callable):
                 return self.text1(*self.args)
             else:
                 return self.text1
         else:
-            if isinstance(self.text2, collections.Callable):
+            if isinstance(self.text2, collections.abc.Callable):
                 return self.text2(*self.args)
             else:
                 return self.text2
@@ -1637,6 +1806,7 @@ class EmailManagerCanceled(Exception):
 
 #Class for managing email stuff
 class EmailManager:
+    dummy_mode = 'Dummy'
     known_modes = {
         'Gmail':['imap.gmail.com', 'SSL', 'smtp.gmail.com', 'SSL', 'Sent'],
         'Microsoft':['outlook.office365.com', 'SSL', 'smtp.office365.com',\
@@ -1660,8 +1830,13 @@ class EmailManager:
         self.verbose = verbose
         self.imap_server = None
         self.smtp_server = None
+        self.dummy = False
         while not ok:
-            if the_file is None:
+            if special_mode == EmailManager.dummy_mode:
+                self.dummy = True
+                print("Dummy email manager created successfully")
+                return
+            elif the_file is None:
                 #Enter the info
                 #Name
                 self.name = seeded_input("Enter your name: ", self.name)
@@ -1814,6 +1989,10 @@ class EmailManager:
 
     #Log into IMAP server
     def imap_login(self):
+        if self.dummy:
+            if self.verbose:
+                print("Dummy: imap login")
+            return
         if self.imap_server is not None:
             # #Log out first if already logged in
             # self.imap_logout()
@@ -1851,6 +2030,10 @@ class EmailManager:
 
     #Log into SMTP server
     def smtp_login(self):
+        if self.dummy:
+            if self.verbose:
+                print("Dummy: smtp login")
+            return
         if self.smtp_server is not None:
             # #Log out first if already logged in
             # self.smtp_logout()
@@ -1878,6 +2061,10 @@ class EmailManager:
 
     #Log out from IMAP server
     def imap_logout(self):
+        if self.dummy:
+            if self.verbose:
+                print("Dummy: imap logout")
+            return
         if self.imap_server is not None:
             if self.verbose:
                 print("Logging out of IMAP server...")
@@ -1886,6 +2073,10 @@ class EmailManager:
 
     #Log out from SMTP server
     def smtp_logout(self):
+        if self.dummy:
+            if verbose:
+                print("Dummy: smtp logout")
+            return
         if self.smtp_server is not None:
             if self.verbose:
                 print("Logging out of SMTP server...")
@@ -1895,6 +2086,10 @@ class EmailManager:
     #Send the email message
     #Store a copy in the sent folder
     def send_message(self, email_msg):
+        if self.dummy:
+            if self.verbose:
+                print("Dummy: send message")
+            return
         #IMAP stuff
         #Copy the message
         date = imaplib.Time2Internaldate(time.time())
@@ -1919,6 +2114,10 @@ class EmailManager:
         #SMTP stuff
         self.smtp_server.send_message(email_msg)
         print("Message sent")
+
+    #Is this manager a dummy?
+    def is_dummy(self):
+        return self.dummy
 
 def print_delay(stuff):
     print(stuff)
@@ -2171,7 +2370,7 @@ if __name__ == '__main__':
             global email_mode
             if val == True:
                 try:
-                    email_config_file = files_input("Enter email config file: ")
+                    email_config_file = files_input("Enter email config file: ").strip()
                 except KeyboardInterrupt:
                     email_config_file = 0
                     print()
@@ -2189,12 +2388,14 @@ if __name__ == '__main__':
             'Gmail')
         manager_setup_menu.add_item("Manual Microsoft", set_email_config_file,\
             'Microsoft')
+        manager_setup_menu.add_item("Use Dummy (for testing)", set_email_config_file,\
+            EmailManager.dummy_mode)
         #Supports email
         def email_students():
             global email_manager
             global email_config_file
             try:
-                if email_manager is None:
+                if email_manager is None or email_manager.is_dummy():
                     while True:
                         manager_setup_menu.prompt()
                         if email_config_file != 0:
@@ -2210,6 +2411,8 @@ if __name__ == '__main__':
                     print("\nEmailing canceled\n")
             except EmailManagerCanceled:
                 print("\nEmail Setup Canceled")
+            except FileNotFoundError:
+                print("\nFile %s not found\nEmail Setup Canceled"%email_config_file)
             except KeyboardInterrupt:
                 print("\nEmail Setup Canceled")
         main_menu.add_item("Email PDFs", email_students)
