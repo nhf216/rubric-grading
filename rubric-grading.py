@@ -672,6 +672,7 @@ class Roster:
             send_ok = False
         def edit_body():
             nonlocal new_body
+            nonlocal body
             body = seeded_input("Edit body: ", body)
             new_body = True
         def preview_pdf():
@@ -2108,7 +2109,7 @@ class EmailManager:
                 if stor[0] != 'OK':
                     raise(ValueError("Failed to mark message as read: %s"%str(stor)))
             elif verbose:
-                print(int(msg), b_search)
+                print(int(msg), srch)
                 print("Message marked as read")
 
         #SMTP stuff
