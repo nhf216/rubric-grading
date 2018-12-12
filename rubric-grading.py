@@ -2081,7 +2081,11 @@ class EmailManager:
         if self.smtp_server is not None:
             if self.verbose:
                 print("Logging out of SMTP server...")
-            self.smtp_server.quit()
+            try:
+                self.smtp_server.quit()
+            except smtplib.SMTPServerDisconnected:
+                print("SMTP server disconnected on its own")
+                print()
             self.smtp_server = None
 
     #Send the email message
@@ -2100,17 +2104,26 @@ class EmailManager:
         if verbose:
             print("Message copied to %s"%self.sent_folder)
         #Mark it as read
-        srch = self.imap_server.search(None, '(UNSEEN)')
-        if srch[0] != 'OK':
-            raise(ValueError("Search for unread messages failed: %s"%str(srch)))
-        for msg in srch[1]:
-            if int(msg) >= self.message_count_init:
-                stor = self.imap_server.store(msg, '+FLAGS', '\\Seen')
-                if stor[0] != 'OK':
-                    raise(ValueError("Failed to mark message as read: %s"%str(stor)))
-            elif verbose:
-                print(int(msg), srch)
-                print("Message marked as read")
+        try:
+            srch = self.imap_server.search(None, '(UNSEEN)')
+            if srch[0] != 'OK':
+                raise(ValueError("Search for unread messages failed: %s"%str(srch)))
+            for msg in srch[1]:
+                try:
+                    if int(msg) >= self.message_count_init:
+                        stor = self.imap_server.store(msg, '+FLAGS', '\\Seen')
+                        if stor[0] != 'OK':
+                            raise(ValueError("Failed to mark message as read: %s"%str(stor)))
+                    elif verbose:
+                        print(int(msg), srch)
+                        print("Message marked as read")
+                except ValueError:
+                    raise(ValueError("Failed to mark message as read, weird error: %s"%str(msg)))
+        except ValueError as er:
+            print("Message NOT marked as read")
+            print("Exception: ")
+            print(er)
+            print()
 
         #SMTP stuff
         self.smtp_server.send_message(email_msg)
@@ -2338,8 +2351,14 @@ if __name__ == '__main__':
         except KeyboardInterrupt:
             fil = None
         if fil is not None:
-            roster.export_pdfs(fil, only_finished = flag == pdf_flag_list[0],\
-                all = flag == pdf_flag_list[-1], verbose = verbose)
+            try:
+                roster.export_pdfs(fil, only_finished = flag == pdf_flag_list[0],\
+                    all = flag == pdf_flag_list[-1], verbose = verbose)
+            except Exception as e:
+                print("Fatal error occurred; not all PDFs written")
+                print("Exception: ")
+                print(e)
+                print()
     for flag in pdf_flag_list:
         pdf_menu.add_item(flag, export_pdf, flag)
     def prompt_pdf(save_as):
