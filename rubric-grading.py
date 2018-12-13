@@ -2242,7 +2242,11 @@ if __name__ == '__main__':
             return
         except KeyboardInterrupt:
             return
-        roster.load(fil)
+        try:
+            roster.load(fil)
+        except KeyError:
+            print("Invalid file; failed to load")
+            print()
 
     def save_and_load():
         if save():
