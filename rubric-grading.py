@@ -44,10 +44,42 @@ RUBRIC_FRONT_MATTER = '&'
 RUBRIC_CATEGORY = '!'
 RUBRIC_POINT_SEP = '~'
 
-ROSTER_SAVE_SYMBOL = '?'
-RUBRIC_SAVE_SEPARATOR = ':'
-RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '&'
-RUBRIC_ATTACHMENT_INDICATOR = '$'
+SAVE_VERSION_HEADER = 'V1\u1004'
+
+ROSTER_SAVE_SYMBOL = '\u1000'
+RUBRIC_SAVE_SEPARATOR = '\u1001'
+RUBRIC_FRONT_MATTER_SAVE_INDICATOR = '\u1002'
+RUBRIC_ATTACHMENT_INDICATOR = '\u1003'
+
+ROSTER_SAVE_SYMBOL_OLD = '?'
+RUBRIC_SAVE_SEPARATOR_OLD = ':'
+RUBRIC_FRONT_MATTER_SAVE_INDICATOR_OLD = '&'
+RUBRIC_ATTACHMENT_INDICATOR_OLD = '$'
+
+#Backwards compatibility
+def get_roster_save_symbol(old = False):
+    if old:
+        return ROSTER_SAVE_SYMBOL_OLD
+    else:
+        return ROSTER_SAVE_SYMBOL
+
+def get_rubric_save_separator(old = False):
+    if old:
+        return RUBRIC_SAVE_SEPARATOR_OLD
+    else:
+        return RUBRIC_SAVE_SEPARATOR
+
+def get_rubric_front_matter_save_indicator(old = False):
+    if old:
+        return RUBRIC_FRONT_MATTER_SAVE_INDICATOR_OLD
+    else:
+        return RUBRIC_FRONT_MATTER_SAVE_INDICATOR
+
+def get_rubric_attachment_indicator(old = False):
+    if old:
+        return RUBRIC_ATTACHMENT_INDICATOR_OLD
+    else:
+        return RUBRIC_ATTACHMENT_INDICATOR
 
 EMAIL_CONFIG_COMMENT = '#'
 
@@ -513,6 +545,8 @@ class Roster:
             print("Error: File %s not found"%file)
             return
         try:
+            #Write the header to indicate the version
+            fd.write("%s\n"%SAVE_VERSION_HEADER)
             for entity in self.graded_entities:
                 fd.write("%s%s\n"%(ROSTER_SAVE_SYMBOL, str(entity)))
                 fd.write("%s\n"%self.rubrics[entity].export_rubric())
@@ -526,20 +560,28 @@ class Roster:
     #Load all the rubrics
     def load(self, file):
         global saved
+        old = False
         fd = open(file, 'r')
         cur_entity = None
         buffer = ""
         def flush_buffer():
             nonlocal buffer
             if buffer != "":
-                self.rubrics[cur_entity].import_rubric(buffer)
+                self.rubrics[cur_entity].import_rubric(buffer, old)
                 buffer = ""
         try:
+            first_line = True
             for line in fd:
                 line = line.strip()
                 if len(line) == 0:
                     continue
-                elif line[0] == ROSTER_SAVE_SYMBOL:
+                if first_line:
+                    first_line = False
+                    if line != SAVE_VERSION_HEADER:
+                        old = True
+                    else:
+                        continue
+                if line[0] == get_roster_save_symbol(old):
                     for entity in self.graded_entities:
                         if str(entity) == line[1:]:
                             flush_buffer()
@@ -1355,19 +1397,19 @@ class Rubric:
         return ret
 
     #Import a string created by export
-    def import_rubric(self, rubric_repr):
+    def import_rubric(self, rubric_repr, old = False):
         #Read in the things that need to be imported
         lines = rubric_repr.split('\n')
         insertions = dict()
         for line in lines:
             if line.strip() == '':
                 continue
-            line_pieces = line.split(RUBRIC_SAVE_SEPARATOR)
-            if line_pieces[0][0] == RUBRIC_FRONT_MATTER_SAVE_INDICATOR:
+            line_pieces = line.split(get_rubric_save_separator(old))
+            if line_pieces[0][0] == get_rubric_front_matter_save_indicator(old):
                 #Front matter
                 self.frontmatter_dict[line_pieces[0][1:]] = line_pieces[1]
                 continue
-            elif line_pieces[0][0] == RUBRIC_ATTACHMENT_INDICATOR:
+            elif line_pieces[0][0] == get_rubric_attachment_indicator(old):
                 #Attachment
                 self.attachments.add(line_pieces[0][1:])
                 continue
@@ -1385,7 +1427,7 @@ class Rubric:
                 the_score = float(the_score)
             else:
                 the_score = int(the_score)
-            the_comment = RUBRIC_SAVE_SEPARATOR.join(line_pieces[2:])
+            the_comment = get_rubric_save_separator(old).join(line_pieces[2:])
             insertions[(the_id, individual_str)] = (the_score, the_comment)
         #Actually do the importing
         def importer(item):
